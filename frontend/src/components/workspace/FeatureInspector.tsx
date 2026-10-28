@@ -1,5 +1,15 @@
 import type { SelectedFeatureInfo } from "./GeoMap";
-import { MapPin, Ruler, Pentagon, X, Copy, Calculator, Database, FlaskConical } from "lucide-react";
+import { Rnd } from "react-rnd";
+import {
+  MapPin,
+  Ruler,
+  Pentagon,
+  X,
+  Copy,
+  Calculator,
+  Database,
+  FlaskConical,
+} from "lucide-react";
 import { useState } from "react";
 
 interface FeatureInspectorProps {
@@ -11,6 +21,9 @@ interface FeatureInspectorProps {
     coordinates: number[] | number[][],
     distanceMetres: number,
   ) => Promise<void>;
+  onAnalyzePointsInPolygon: () => void;
+  pointAnalysisResult: Record<string, any> | null;
+  onClearPointAnalysis: () => void;
 }
 
 function formatLength(meters: number): string {
@@ -36,6 +49,9 @@ export default function FeatureInspector({
   feature,
   onCreateBuffer,
   onClose,
+  onAnalyzePointsInPolygon,
+  pointAnalysisResult,
+  onClearPointAnalysis,
 }: FeatureInspectorProps) {
   const isDark = theme === "dark";
 
@@ -133,399 +149,506 @@ export default function FeatureInspector({
   const coordinatesText = JSON.stringify(feature.coordinates, null, 2);
 
   return (
-    <aside
-      className={`absolute bottom-4 left-4 z-20 w-80 max-w-[calc(100%-2rem)] overflow-hidden rounded-2xl border shadow-2xl backdrop-blur-xl transition-colors duration-200 ${
-        isDark
-          ? "border-neutral-800 bg-neutral-950/95 text-neutral-100 shadow-black/40"
-          : "border-gray-200 bg-white/95 text-gray-900 shadow-gray-300/40"
-      }`}
+    <Rnd
+      default={{
+        x: 0,
+        y: 0,
+        width: 680,
+        height: 440,
+      }}
+      minWidth={400}
+      minHeight={280}
+      bounds="parent"
+      dragHandleClassName="feature-inspector-drag-handle"
+      enableResizing={{
+        top: true,
+        right: true,
+        bottom: true,
+        left: true,
+        topRight: true,
+        bottomRight: true,
+        bottomLeft: true,
+        topLeft: true,
+      }}
+      className="z-20"
     >
-      {/* Header */}
-      <div
-        className={`flex items-center justify-between border-b px-4 py-3 ${
-          isDark ? "border-neutral-800" : "border-gray-100"
+      <aside
+        className={`flex h-full w-full flex-col overflow-hidden rounded-2xl border backdrop-blur-2xl transition-colors duration-300 ${
+          isDark
+            ? "border-white/12 bg-neutral-950/65 text-neutral-100 shadow-[0_20px_60px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.04)]"
+            : "border-white/80 bg-white/65 text-gray-900 shadow-[0_20px_60px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.7)]"
         }`}
       >
-        <div className="flex items-center gap-3">
-          <div
-            className={`flex h-9 w-9 items-center justify-center rounded-xl border ${
-              isDark
-                ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-400"
-                : "border-emerald-200 bg-emerald-50 text-emerald-700"
-            }`}
-          >
-            <GeometryIcon size={19} strokeWidth={1.8} />
+        {/* Header */}
+        <div
+          className={`feature-inspector-drag-handle flex shrink-0 cursor-move items-center justify-between border-b px-4 py-3 ${
+            isDark
+              ? "border-white/[0.09] bg-white/[0.025]"
+              : "border-white/70 bg-white/30"
+          }`}
+        >
+          <div className="flex items-center gap-3">
+            <div
+              className={`flex h-9 w-9 items-center justify-center rounded-xl border ${
+                isDark
+                  ? "border-emerald-400/20 bg-emerald-400/[0.10] text-emerald-400"
+                  : "border-emerald-200/70 bg-emerald-50/70 text-emerald-700"
+              }`}
+            >
+              <GeometryIcon size={19} strokeWidth={1.8} />
+            </div>
+
+            <div>
+              <h3 className="text-sm font-semibold tracking-tight">
+                Feature Inspector
+              </h3>
+              <div className="mt-1 flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_7px_rgba(16,185,129,0.45)]" />
+                <p
+                  className={`text-[11px] ${
+                    isDark ? "text-neutral-400" : "text-gray-500"
+                  }`}
+                >
+                  {feature.geometryType}
+                </p>
+              </div>
+            </div>
           </div>
 
-          <div>
-            <h3 className="text-sm font-semibold tracking-tight">
-              Feature Inspector
-            </h3>
-            <div className="mt-1 flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+          <button
+            type="button"
+            onClick={onClose}
+            title="Close inspector"
+            aria-label="Close inspector"
+            className={`rounded-lg border border-transparent p-2 transition-colors ${
+              isDark
+                ? "text-neutral-400 hover:border-white/[0.08] hover:bg-white/[0.07] hover:text-white"
+                : "text-gray-400 hover:border-gray-200/60 hover:bg-white/70 hover:text-gray-900"
+            }`}
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Scrollable content */}
+        <div
+          className={`min-h-0 flex-1 space-y-4 overflow-y-auto p-4 scrollbar-thin ${
+            isDark
+              ? "[scrollbar-color:rgba(52,211,153,0.3)_transparent] [&::-webkit-scrollbar-thumb]:bg-emerald-400/25 hover:[&::-webkit-scrollbar-thumb]:bg-emerald-400/50"
+              : "[scrollbar-color:rgba(5,150,105,0.3)_transparent] [&::-webkit-scrollbar-thumb]:bg-emerald-600/25 hover:[&::-webkit-scrollbar-thumb]:bg-emerald-600/50"
+          } [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar]:h-1 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full`}
+        >
+          {/* Feature metadata */}
+          <section>
+            <div className="mb-3 flex items-center justify-between">
+              <p
+                className={`text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                  isDark ? "text-neutral-400" : "text-gray-500"
+                }`}
+              >
+                Feature details
+              </p>
+              <span
+                className={`rounded-lg border px-2 py-1 text-[10px] font-medium ${
+                  isDark
+                    ? "border-white/8 bg-white/4 text-neutral-400"
+                    : "border-gray-200/70 bg-white/50 text-gray-500"
+                }`}
+              >
+                Selected
+              </span>
+            </div>
+
+            <div
+              className={`rounded-xl border p-3 backdrop-blur-xl ${
+                isDark
+                  ? "border-white/8 bg-white/2.5"
+                  : "border-white/80 bg-white/40"
+              }`}
+            >
               <p
                 className={`text-[11px] ${
                   isDark ? "text-neutral-400" : "text-gray-500"
                 }`}
               >
-                {feature.geometryType}
+                Feature ID
+              </p>
+              <p className="mt-1.5 break-all font-mono text-xs leading-relaxed">
+                {feature.id}
               </p>
             </div>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={onClose}
-          title="Close inspector"
-          aria-label="Close inspector"
-          className={`rounded-lg p-2 transition-colors ${
-            isDark
-              ? "text-neutral-500 hover:bg-neutral-800 hover:text-white"
-              : "text-gray-400 hover:bg-gray-100 hover:text-gray-900"
-          }`}
-        >
-          <X size={16} />
-        </button>
-      </div>
-
-      <div className="max-h-[calc(100vh-9rem)] space-y-4 overflow-y-auto p-4">
-        {/* Feature metadata */}
-        <section>
-          <div className="mb-3 flex items-center justify-between">
-            <p
-              className={`text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                isDark ? "text-neutral-500" : "text-gray-400"
-              }`}
-            >
-              Feature details
-            </p>
-            <span
-              className={`rounded-md px-2 py-1 text-[10px] font-medium ${
-                isDark
-                  ? "bg-neutral-900 text-neutral-400"
-                  : "bg-gray-100 text-gray-500"
-              }`}
-            >
-              Selected
-            </span>
-          </div>
-
-          <div
-            className={`rounded-xl border p-3 ${
-              isDark
-                ? "border-neutral-800 bg-black/50"
-                : "border-gray-100 bg-gray-50/80"
-            }`}
-          >
-            <p
-              className={`text-[11px] ${
-                isDark ? "text-neutral-500" : "text-gray-500"
-              }`}
-            >
-              Feature ID
-            </p>
-            <p className="mt-1.5 break-all font-mono text-xs leading-relaxed">
-              {feature.id}
-            </p>
-          </div>
-        </section>
-
-        {/* Geometry measurements */}
-        {(feature.geometryType === "LineString" &&
-          feature.lengthMeters !== undefined) ||
-        (feature.geometryType === "Polygon" &&
-          feature.areaSquareMeters !== undefined) ? (
-          <section>
-            <p
-              className={`mb-3 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                isDark ? "text-neutral-500" : "text-gray-400"
-              }`}
-            >
-              Measurements
-            </p>
-
-            <div className="grid grid-cols-2 gap-2">
-              {feature.geometryType === "LineString" &&
-                feature.lengthMeters !== undefined && (
-                  <div
-                    className={`rounded-xl border p-3 ${
-                      isDark
-                        ? "border-neutral-800 bg-neutral-900/60"
-                        : "border-gray-200 bg-white"
-                    }`}
-                  >
-                    <div className="mb-2 flex items-center gap-1.5">
-                      <Ruler size={13} className="text-emerald-500" />
-                      <p
-                        className={`text-[10px] ${
-                          isDark ? "text-neutral-400" : "text-gray-500"
-                        }`}
-                      >
-                        Line length
-                      </p>
-                    </div>
-                    <p className="text-sm font-semibold tracking-tight text-emerald-500">
-                      {formatLength(feature.lengthMeters)}
-                    </p>
-                  </div>
-                )}
-
-              {feature.geometryType === "Polygon" &&
-                feature.areaSquareMeters !== undefined && (
-                  <div
-                    className={`rounded-xl border p-3 ${
-                      isDark
-                        ? "border-neutral-800 bg-neutral-900/60"
-                        : "border-gray-200 bg-white"
-                    }`}
-                  >
-                    <div className="mb-2 flex items-center gap-1.5">
-                      <FlaskConical size={13} className="text-emerald-500" />
-                      <p
-                        className={`text-[10px] ${
-                          isDark ? "text-neutral-400" : "text-gray-500"
-                        }`}
-                      >
-                        Polygon area
-                      </p>
-                    </div>
-                    <p className="text-sm font-semibold tracking-tight text-emerald-500">
-                      {formatArea(feature.areaSquareMeters)}
-                    </p>
-                  </div>
-                )}
-
-              {feature.geometryType === "Polygon" &&
-                feature.perimeterMeters !== undefined && (
-                  <div
-                    className={`rounded-xl border p-3 ${
-                      isDark
-                        ? "border-neutral-800 bg-neutral-900/60"
-                        : "border-gray-200 bg-white"
-                    }`}
-                  >
-                    <div className="mb-2 flex items-center gap-1.5">
-                      <Ruler size={13} className="text-emerald-500" />
-                      <p
-                        className={`text-[10px] ${
-                          isDark ? "text-neutral-400" : "text-gray-500"
-                        }`}
-                      >
-                        Perimeter
-                      </p>
-                    </div>
-                    <p className="text-sm font-semibold tracking-tight">
-                      {formatLength(feature.perimeterMeters)}
-                    </p>
-                  </div>
-                )}
-            </div>
           </section>
-        ) : null}
 
-        {/* Backend area calculation */}
-        {feature.geometryType === "Polygon" && (
-          <section>
-            <p
-              className={`mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                isDark ? "text-neutral-500" : "text-gray-400"
-              }`}
-            >
-              Spatial tools
-            </p>
-
-            <button
-              type="button"
-              onClick={calculateAreaWithBackend}
-              disabled={areaLoading}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-3 py-2.5 text-xs font-semibold text-black transition-all hover:bg-emerald-400 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Calculator size={15} />
-              {areaLoading ? "Calculating area..." : "Calculate area with API"}
-            </button>
-
-            {backendArea && (
-              <div
-                className={`mt-3 rounded-xl border p-3 ${
-                  isDark
-                    ? "border-emerald-500/20 bg-emerald-500/6"
-                    : "border-emerald-200 bg-emerald-50/70"
+          {/* Geometry measurements */}
+          {(feature.geometryType === "LineString" &&
+            feature.lengthMeters !== undefined) ||
+          (feature.geometryType === "Polygon" &&
+            feature.areaSquareMeters !== undefined) ? (
+            <section>
+              <p
+                className={`mb-3 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                  isDark ? "text-neutral-400" : "text-gray-500"
                 }`}
               >
-                <div className="flex items-center gap-2">
-                  <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-500">
-                    <Database size={13} />
+                Measurements
+              </p>
+
+              <div className="grid grid-cols-2 gap-2">
+                {feature.geometryType === "LineString" &&
+                  feature.lengthMeters !== undefined && (
+                    <div
+                      className={`rounded-xl border p-3 backdrop-blur-xl ${
+                        isDark
+                          ? "border-white/8 bg-white/[0.035]"
+                          : "border-white/80 bg-white/45"
+                      }`}
+                    >
+                      <div className="mb-2 flex items-center gap-1.5">
+                        <Ruler size={13} className="text-emerald-500" />
+                        <p
+                          className={`text-[10px] ${
+                            isDark ? "text-neutral-400" : "text-gray-500"
+                          }`}
+                        >
+                          Line length
+                        </p>
+                      </div>
+                      <p className="text-sm font-semibold tracking-tight text-emerald-500">
+                        {formatLength(feature.lengthMeters)}
+                      </p>
+                    </div>
+                  )}
+
+                {feature.geometryType === "Polygon" &&
+                  feature.areaSquareMeters !== undefined && (
+                    <div
+                      className={`rounded-xl border p-3 backdrop-blur-xl ${
+                        isDark
+                          ? "border-white/8 bg-white/[0.035]"
+                          : "border-white/80 bg-white/45"
+                      }`}
+                    >
+                      <div className="mb-2 flex items-center gap-1.5">
+                        <FlaskConical size={13} className="text-emerald-500" />
+                        <p
+                          className={`text-[10px] ${
+                            isDark ? "text-neutral-400" : "text-gray-500"
+                          }`}
+                        >
+                          Polygon area
+                        </p>
+                      </div>
+                      <p className="text-sm font-semibold tracking-tight text-emerald-500">
+                        {formatArea(feature.areaSquareMeters)}
+                      </p>
+                    </div>
+                  )}
+
+                {feature.geometryType === "Polygon" &&
+                  feature.perimeterMeters !== undefined && (
+                    <div
+                      className={`rounded-xl border p-3 backdrop-blur-xl ${
+                        isDark
+                          ? "border-white/8 bg-white/[0.035]"
+                          : "border-white/80 bg-white/45"
+                      }`}
+                    >
+                      <div className="mb-2 flex items-center gap-1.5">
+                        <Ruler size={13} className="text-emerald-500" />
+                        <p
+                          className={`text-[10px] ${
+                            isDark ? "text-neutral-400" : "text-gray-500"
+                          }`}
+                        >
+                          Perimeter
+                        </p>
+                      </div>
+                      <p className="text-sm font-semibold tracking-tight">
+                        {formatLength(feature.perimeterMeters)}
+                      </p>
+                    </div>
+                  )}
+              </div>
+            </section>
+          ) : null}
+
+          {/* Backend area calculation */}
+          {feature.geometryType === "Polygon" && (
+            <section>
+              <p
+                className={`mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                  isDark ? "text-neutral-400" : "text-gray-500"
+                }`}
+              >
+                Spatial tools
+              </p>
+
+              <button
+                type="button"
+                onClick={calculateAreaWithBackend}
+                disabled={areaLoading}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-400/20 bg-emerald-500/90 px-3 py-2.5 text-xs font-semibold text-neutral-950 shadow-[0_4px_18px_rgba(16,185,129,0.12)] transition-all hover:border-emerald-300 hover:bg-emerald-400 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Calculator size={15} />
+                {areaLoading
+                  ? "Calculating area..."
+                  : "Calculate area with API"}
+              </button>
+
+              {backendArea && (
+                <div
+                  className={`mt-3 rounded-xl border p-3 backdrop-blur-xl ${
+                    isDark
+                      ? "border-emerald-400/20 bg-emerald-400/6"
+                      : "border-emerald-200/70 bg-emerald-50/60"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-emerald-400/15 bg-emerald-500/10 text-emerald-500">
+                      <Database size={13} />
+                    </div>
+                    <p className="text-xs font-medium text-emerald-500">
+                      Backend result
+                    </p>
                   </div>
-                  <p className="text-xs font-medium text-emerald-500">
-                    Backend result
+
+                  <p className="mt-3 text-lg font-semibold tracking-tight">
+                    {formatArea(backendArea.squareMetres)}
+                  </p>
+                  <p
+                    className={`mt-1 text-[11px] ${
+                      isDark ? "text-neutral-400" : "text-gray-500"
+                    }`}
+                  >
+                    {backendArea.squareKilometres.toFixed(6)} km²
                   </p>
                 </div>
+              )}
 
-                <p className="mt-3 text-lg font-semibold tracking-tight">
-                  {formatArea(backendArea.squareMetres)}
-                </p>
-                <p
-                  className={`mt-1 text-[11px] ${
-                    isDark ? "text-neutral-400" : "text-gray-500"
+              {areaError && (
+                <p className="mt-2 text-xs text-red-500">{areaError}</p>
+              )}
+            </section>
+          )}
+
+          {/* Buffer analysis */}
+          {(feature.geometryType === "Point" ||
+            feature.geometryType === "LineString") && (
+            <section
+              className={`border-t pt-4 ${
+                isDark ? "border-white/9" : "border-gray-200/70"
+              }`}
+            >
+              <div className="mb-3 flex items-center gap-2">
+                <div
+                  className={`flex h-8 w-8 items-center justify-center rounded-xl border ${
+                    isDark
+                      ? "border-emerald-400/10 bg-emerald-400/[0.07] text-emerald-400"
+                      : "border-emerald-200/60 bg-emerald-50/70 text-emerald-700"
                   }`}
                 >
-                  {backendArea.squareKilometres.toFixed(6)} km²
-                </p>
+                  <Ruler size={14} />
+                </div>
+                <div>
+                  <h4 className="text-xs font-semibold">Buffer analysis</h4>
+                  <p
+                    className={`mt-0.5 text-[10px] ${
+                      isDark ? "text-neutral-400" : "text-gray-500"
+                    }`}
+                  >
+                    Create a surrounding zone
+                  </p>
+                </div>
               </div>
-            )}
 
-            {areaError && (
-              <p className="mt-2 text-xs text-red-500">{areaError}</p>
-            )}
-          </section>
-        )}
-
-        {/* Buffer analysis */}
-        {(feature.geometryType === "Point" ||
-          feature.geometryType === "LineString") && (
-          <section
-            className={`border-t pt-4 ${
-              isDark ? "border-neutral-800" : "border-gray-100"
-            }`}
-          >
-            <div className="mb-3 flex items-center gap-2">
-              <div
-                className={`flex h-7 w-7 items-center justify-center rounded-lg ${
-                  isDark
-                    ? "bg-neutral-900 text-emerald-400"
-                    : "bg-emerald-50 text-emerald-700"
+              <label
+                className={`mb-1.5 block text-[11px] ${
+                  isDark ? "text-neutral-400" : "text-gray-500"
                 }`}
               >
-                <Ruler size={14} />
-              </div>
-              <div>
-                <h4 className="text-xs font-semibold">Buffer analysis</h4>
-                <p
-                  className={`mt-0.5 text-[10px] ${
-                    isDark ? "text-neutral-500" : "text-gray-500"
-                  }`}
-                >
-                  Create a surrounding zone
+                Distance (metres)
+              </label>
+
+              <input
+                type="number"
+                min={1}
+                max={100000}
+                value={bufferDistance}
+                onChange={(event) =>
+                  setBufferDistance(Number(event.target.value))
+                }
+                className={`w-full rounded-xl border px-3 py-2.5 text-sm outline-none backdrop-blur-xl transition-colors focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 ${
+                  isDark
+                    ? "border-white/10 bg-white/[0.035] text-white placeholder:text-neutral-500"
+                    : "border-white/80 bg-white/50 text-gray-900 placeholder:text-gray-400"
+                }`}
+              />
+
+              <button
+                type="button"
+                onClick={handleCreateBuffer}
+                disabled={
+                  bufferLoading ||
+                  !Number.isFinite(bufferDistance) ||
+                  bufferDistance <= 0 ||
+                  bufferDistance > 100000
+                }
+                className={`mt-2.5 flex w-full items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold backdrop-blur-xl transition-all disabled:cursor-not-allowed disabled:opacity-50 ${
+                  isDark
+                    ? "border-white/10 bg-white/4 text-neutral-200 hover:border-emerald-400/30 hover:bg-emerald-400/[0.07]"
+                    : "border-white/80 bg-white/55 text-gray-700 hover:border-emerald-200 hover:bg-emerald-50/60"
+                }`}
+              >
+                {bufferLoading ? "Creating buffer..." : "Create buffer"}
+              </button>
+
+              {bufferError && (
+                <p className="mt-2 text-xs text-red-500">{bufferError}</p>
+              )}
+            </section>
+          )}
+
+          {/* Point-in-polygon results */}
+          {pointAnalysisResult && (
+            <section
+              className={`rounded-xl border p-3 backdrop-blur-xl ${
+                isDark
+                  ? "border-emerald-400/20 bg-emerald-400/5"
+                  : "border-emerald-200/70 bg-emerald-50/50"
+              }`}
+            >
+              <h4 className="mb-3 text-sm font-semibold">
+                Point-in-Polygon Results
+              </h4>
+
+              {pointAnalysisResult.error ? (
+                <p className="text-sm text-red-500">
+                  {pointAnalysisResult.error}
                 </p>
-              </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <p
+                        className={`text-xs ${
+                          isDark ? "text-neutral-400" : "text-gray-500"
+                        }`}
+                      >
+                        Points inside
+                      </p>
+                      <p className="text-xl font-semibold text-emerald-500">
+                        {pointAnalysisResult.points_inside_count}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p
+                        className={`text-xs ${
+                          isDark ? "text-neutral-400" : "text-gray-500"
+                        }`}
+                      >
+                        Points outside
+                      </p>
+                      <p className="text-xl font-semibold">
+                        {pointAnalysisResult.points_outside_count}
+                      </p>
+                    </div>
+                  </div>
+
+                  <p
+                    className={`mt-3 text-xs ${
+                      isDark ? "text-neutral-400" : "text-gray-500"
+                    }`}
+                  >
+                    Total analyzed: {pointAnalysisResult.total_points}
+                  </p>
+                </>
+              )}
+            </section>
+          )}
+
+          {feature?.geometryType === "Polygon" && (
+            <button
+              type="button"
+              onClick={onAnalyzePointsInPolygon}
+              className="w-full rounded-xl border border-emerald-400/20 bg-emerald-500/90 px-4 py-2.5 text-sm font-semibold text-neutral-950 transition hover:bg-emerald-400 active:scale-[0.99]"
+            >
+              Analyze Imported Points
+            </button>
+          )}
+
+          {pointAnalysisResult && (
+            <button
+              type="button"
+              onClick={onClearPointAnalysis}
+              className={`w-full rounded-xl border px-4 py-2.5 text-sm transition-colors ${
+                isDark
+                  ? "border-red-400/20 bg-red-400/5 text-red-400 hover:bg-red-400/10"
+                  : "border-red-200/70 bg-red-50/60 text-red-600 hover:bg-red-50"
+              }`}
+            >
+              Clear Analysis
+            </button>
+          )}
+
+          {/* Coordinates */}
+          <section>
+            <div className="mb-2 flex items-center justify-between">
+              <p
+                className={`text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                  isDark ? "text-neutral-400" : "text-gray-500"
+                }`}
+              >
+                Coordinates
+              </p>
+
+              <button
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard.writeText(coordinatesText);
+                }}
+                className={`flex items-center gap-1.5 rounded-lg border border-transparent px-2 py-1.5 text-[11px] font-medium transition-colors ${
+                  isDark
+                    ? "text-neutral-400 hover:border-white/8 hover:bg-white/5 hover:text-emerald-400"
+                    : "text-gray-500 hover:border-gray-200/70 hover:bg-white/60 hover:text-emerald-700"
+                }`}
+              >
+                <Copy size={12} />
+                Copy
+              </button>
             </div>
 
-            <label
-              className={`mb-1.5 block text-[11px] ${
+            <pre
+              className={`max-h-32 overflow-auto rounded-xl border p-3 font-mono text-[10px] leading-relaxed backdrop-blur-xl scrollbar-thin ${
+                isDark
+                  ? "border-white/8 bg-white/2.5 text-neutral-300 [scrollbar-color:rgba(52,211,153,0.3)_transparent]"
+                  : "border-white/80 bg-white/40 text-gray-700 [scrollbar-color:rgba(5,150,105,0.3)_transparent]"
+              } [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar]:h-1 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-emerald-500/30`}
+            >
+              {coordinatesText}
+            </pre>
+          </section>
+
+          {/* Footer */}
+          <div
+            className={`flex items-center gap-2 border-t pt-3 ${
+              isDark ? "border-white/9" : "border-gray-200/70"
+            }`}
+          >
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-30" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+            </span>
+            <p
+              className={`text-[10px] ${
                 isDark ? "text-neutral-400" : "text-gray-500"
               }`}
             >
-              Distance (metres)
-            </label>
-
-            <input
-              type="number"
-              min={1}
-              max={100000}
-              value={bufferDistance}
-              onChange={(event) =>
-                setBufferDistance(Number(event.target.value))
-              }
-              className={`w-full rounded-xl border px-3 py-2.5 text-sm outline-none transition-colors focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 ${
-                isDark
-                  ? "border-neutral-800 bg-black text-white placeholder:text-neutral-600"
-                  : "border-gray-200 bg-white text-gray-900 placeholder:text-gray-400"
-              }`}
-            />
-
-            <button
-              type="button"
-              onClick={handleCreateBuffer}
-              disabled={
-                bufferLoading ||
-                !Number.isFinite(bufferDistance) ||
-                bufferDistance <= 0 ||
-                bufferDistance > 100000
-              }
-              className={`mt-2.5 flex w-full items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-                isDark
-                  ? "border-neutral-700 bg-neutral-900 text-neutral-200 hover:border-emerald-500/40 hover:bg-neutral-800"
-                  : "border-gray-200 bg-white text-gray-700 hover:border-emerald-300 hover:bg-emerald-50"
-              }`}
-            >
-              {bufferLoading ? "Creating buffer..." : "Create buffer"}
-            </button>
-
-            {bufferError && (
-              <p className="mt-2 text-xs text-red-500">{bufferError}</p>
-            )}
-          </section>
-        )}
-
-        {/* Coordinates */}
-        <section>
-          <div className="mb-2 flex items-center justify-between">
-            <p
-              className={`text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                isDark ? "text-neutral-500" : "text-gray-400"
-              }`}
-            >
-              Coordinates
+              Ready for spatial analysis
             </p>
-
-            <button
-              type="button"
-              onClick={() => {
-                void navigator.clipboard.writeText(coordinatesText);
-              }}
-              className={`flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-medium transition-colors ${
-                isDark
-                  ? "text-neutral-400 hover:bg-neutral-800 hover:text-emerald-400"
-                  : "text-gray-500 hover:bg-gray-100 hover:text-emerald-700"
-              }`}
-            >
-              <Copy size={12} />
-              Copy
-            </button>
           </div>
-
-          <pre
-            className={`max-h-32 overflow-auto rounded-xl border p-3 font-mono text-[10px] leading-relaxed
-                scrollbar-thin
-                ${
-                isDark
-                    ? "border-neutral-800 bg-black text-neutral-300 [scrollbar-color:rgba(52,211,153,0.3)_transparent]"
-                    : "border-gray-100 bg-gray-50 text-gray-700 [scrollbar-color:rgba(5,150,105,0.3)_transparent]"
-                }
-                [&::-webkit-scrollbar]:w-1
-                [&::-webkit-scrollbar]:h-1
-                [&::-webkit-scrollbar-track]:bg-transparent
-                [&::-webkit-scrollbar-thumb]:rounded-full
-                ${
-                isDark
-                    ? "[&::-webkit-scrollbar-thumb]:bg-emerald-400/25 hover:[&::-webkit-scrollbar-thumb]:bg-emerald-400/50"
-                    : "[&::-webkit-scrollbar-thumb]:bg-emerald-600/25 hover:[&::-webkit-scrollbar-thumb]:bg-emerald-600/50"
-                }`}
-            >
-            {coordinatesText}
-            </pre>
-        </section>
-
-        {/* Footer */}
-        <div
-          className={`flex items-center gap-2 border-t pt-3 ${
-            isDark ? "border-neutral-800" : "border-gray-100"
-          }`}
-        >
-          <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-30" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-          </span>
-          <p
-            className={`text-[10px] ${
-              isDark ? "text-neutral-400" : "text-gray-500"
-            }`}
-          >
-            Ready for spatial analysis
-          </p>
         </div>
-      </div>
-    </aside>
+      </aside>
+    </Rnd>
   );
 }

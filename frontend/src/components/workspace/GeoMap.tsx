@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import type { Feature as GeoJSONFeature } from "geojson";
 import Map from "ol/Map";
 import View from "ol/View";
 import TileLayer from "ol/layer/Tile";
@@ -39,6 +40,19 @@ export interface ImportedLayerInfo {
   visible: boolean;
 }
 
+export interface ImportedPointInfo {
+  layerId: string;
+  layerName: string;
+  points: {
+    coordinates: [number, number];
+    featureId: string;
+  }[];
+}
+
+interface GeoMapProps {
+  theme: "light" | "dark";
+}
+
 export type BaseMapType = "dark" | "light" | "satellite";
 
 export interface GeoMapHandle {
@@ -66,17 +80,26 @@ export interface GeoMapHandle {
   zoomToImportedLayer: (id: string) => void;
   addBufferGeoJSON: (geojson: string) => void;
   clearFeatureSelection: () => void;
+  getImportedPoints: () => ImportedPointInfo[];
+  highlightPointsInPolygon: (coordinates: number[][]) => void;
+  clearPointHighlights: () => void;
+  getImportedGeoJSON: (layerId: string) => string | null;
+  highlightSpatialQueryResults: (features: GeoJSONFeature[]) => void;
+  addClipResultGeoJSON: (geojson: string, layerName?: string) => void;
 }
 
 const INITIAL_CENTER: [number, number] = [0, 0];
 const INITIAL_ZOOM = 2;
 
-const GeoMap = forwardRef<GeoMapHandle>(function GeoMap(_, ref) {
+const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
+  { theme },
+  ref,
+) {
   const mapElement = useRef<HTMLDivElement | null>(null);
   const mapInstance = useRef<Map | null>(null);
 
   const baseLayers = useRef<{
-    light: TileLayer<OSM>;
+    light: TileLayer<XYZ>;
     dark: TileLayer<XYZ>;
   } | null>(null);
 
@@ -86,6 +109,9 @@ const GeoMap = forwardRef<GeoMapHandle>(function GeoMap(_, ref) {
   const drawingSourceRef = useRef<VectorSource | null>(null);
   const drawInteractionRef = useRef<Draw | null>(null);
   const selectInteractionRef = useRef<Select | null>(null);
+  const pointHighlightLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
+  const spatialQueryHighlightLayerRef =
+    useRef<VectorLayer<VectorSource> | null>(null);
 
   const onFeatureSelectRef = useRef<
     ((feature: SelectedFeatureInfo | null) => void) | null
@@ -354,7 +380,7 @@ const GeoMap = forwardRef<GeoMapHandle>(function GeoMap(_, ref) {
 
       const extent = record.source.getExtent();
 
-      if (isEmpty(extent)) return;
+      if (!extent || isEmpty(extent)) return;
 
       map.getView().fit(extent, {
         padding: [60, 60, 60, 60],
@@ -400,7 +426,7 @@ const GeoMap = forwardRef<GeoMapHandle>(function GeoMap(_, ref) {
 
       const extent = source.getExtent();
 
-      if (!isEmpty(extent)) {
+      if (extent && !isEmpty(extent)) {
         map.getView().fit(extent, {
           padding: [60, 60, 60, 60],
           duration: 500,
@@ -412,21 +438,279 @@ const GeoMap = forwardRef<GeoMapHandle>(function GeoMap(_, ref) {
       selectInteractionRef.current?.getFeatures().clear();
       onFeatureSelectRef.current?.(null);
     },
-    
+    getImportedPoints() {
+      return importedLayersRef.current
+        .filter(({ layer }) => layer.getVisible())
+        .map(({ id, name, source }) => {
+          const points = source.getFeatures().flatMap((feature) => {
+            const geometry = feature.getGeometry();
+
+            if (!geometry || geometry.getType() !== "Point") {
+              return [];
+            }
+
+            const point = geometry as Point;
+
+            const coordinates = point
+              .clone()
+              .transform("EPSG:3857", "EPSG:4326")
+              .getCoordinates();
+
+            return [
+              {
+                coordinates: [coordinates[0], coordinates[1]] as [
+                  number,
+                  number,
+                ],
+                featureId: String(feature.getId() ?? crypto.randomUUID()),
+              },
+            ];
+          });
+
+          return {
+            layerId: id,
+            layerName: name,
+            points,
+          };
+        });
+    },
+    highlightPointsInPolygon(coordinates) {
+      const map = mapInstance.current;
+
+      if (!map) return;
+
+      // Remove highlights from the previous analysis.
+      if (pointHighlightLayerRef.current) {
+        map.removeLayer(pointHighlightLayerRef.current);
+        pointHighlightLayerRef.current = null;
+      }
+
+      if (coordinates.length === 0) return;
+
+      const features = coordinates.map(
+        ([longitude, latitude]) =>
+          new Feature({
+            geometry: new Point(fromLonLat([longitude, latitude])),
+          }),
+      );
+
+      const source = new VectorSource({ features });
+
+      const layer = new VectorLayer({
+        source,
+        zIndex: 110,
+        style: new Style({
+          image: new Circle({
+            radius: 8,
+            fill: new Fill({ color: "#10b981" }),
+            stroke: new Stroke({
+              color: "#ffffff",
+              width: 2,
+            }),
+          }),
+        }),
+      });
+
+      map.addLayer(layer);
+      pointHighlightLayerRef.current = layer;
+    },
+
+    clearPointHighlights() {
+      const map = mapInstance.current;
+      const layer = pointHighlightLayerRef.current;
+
+      if (map && layer) {
+        map.removeLayer(layer);
+        pointHighlightLayerRef.current = null;
+      }
+    },
+    getImportedGeoJSON(layerId) {
+      const record = importedLayersRef.current.find(
+        (item) => item.id === layerId,
+      );
+
+      if (!record) return null;
+
+      return new GeoJSON().writeFeatures(record.source.getFeatures(), {
+        featureProjection: "EPSG:3857",
+        dataProjection: "EPSG:4326",
+        decimals: 6,
+      });
+    },
+    highlightSpatialQueryResults(features) {
+      const map = mapInstance.current;
+
+      if (!map) return;
+
+      // Remove only the previous spatial-query highlight layer.
+      if (spatialQueryHighlightLayerRef.current) {
+        map.removeLayer(spatialQueryHighlightLayerRef.current);
+        spatialQueryHighlightLayerRef.current = null;
+      }
+
+      if (features.length === 0) return;
+
+      const format = new GeoJSON();
+
+      const mapFeatures = format.readFeatures(
+        {
+          type: "FeatureCollection",
+          features,
+        },
+        {
+          dataProjection: "EPSG:4326",
+          featureProjection: "EPSG:3857",
+        },
+      );
+
+      const source = new VectorSource({
+        features: mapFeatures,
+      });
+
+      const layer = new VectorLayer({
+        source,
+        zIndex: 115,
+        style: new Style({
+          fill: new Fill({
+            color: "rgba(16, 185, 129, 0.22)",
+          }),
+          stroke: new Stroke({
+            color: "#10b981",
+            width: 4,
+          }),
+          image: new Circle({
+            radius: 9,
+            fill: new Fill({
+              color: "#10b981",
+            }),
+            stroke: new Stroke({
+              color: "#ffffff",
+              width: 2,
+            }),
+          }),
+        }),
+      });
+
+      map.addLayer(layer);
+      spatialQueryHighlightLayerRef.current = layer;
+
+      const extent = source.getExtent();
+
+      if (extent && !isEmpty(extent)) {
+        map.getView().fit(extent, {
+          padding: [80, 80, 80, 80],
+          duration: 500,
+          maxZoom: 16,
+        });
+      }
+    },
+
+    addClipResultGeoJSON(geojson, layerName) {
+      const map = mapInstance.current;
+
+      if (!map) {
+        throw new Error("Map is not ready yet.");
+      }
+
+      const format = new GeoJSON();
+
+      const features = format.readFeatures(geojson, {
+        dataProjection: "EPSG:4326",
+        featureProjection: "EPSG:3857",
+      });
+
+      if (features.length === 0) {
+        throw new Error("The clip result contains no features.");
+      }
+
+      const source = new VectorSource({ features });
+
+      const layer = new VectorLayer({
+        source,
+        zIndex: 100 + importedLayersRef.current.length,
+        style: new Style({
+          fill: new Fill({
+            color: "rgba(16, 185, 129, 0.24)",
+          }),
+          stroke: new Stroke({
+            color: "#10b981",
+            width: 3,
+          }),
+          image: new Circle({
+            radius: 7,
+            fill: new Fill({ color: "#10b981" }),
+            stroke: new Stroke({
+              color: "#ffffff",
+              width: 2,
+            }),
+          }),
+        }),
+      });
+
+      const geometryTypes = [
+        ...new Set(
+          features.map(
+            (feature) => feature.getGeometry()?.getType() ?? "Unknown",
+          ),
+        ),
+      ];
+
+      const id = crypto.randomUUID();
+      const name = `${layerName ?? "Clip Result"} ${
+        importedLayersRef.current.length + 1
+      }`;
+
+      map.addLayer(layer);
+
+      importedLayersRef.current.push({
+        id,
+        name,
+        source,
+        layer,
+        count: features.length,
+        geometryTypes,
+      });
+
+      const extent = source.getExtent();
+
+      if (extent && !isEmpty(extent)) {
+        map.getView().fit(extent, {
+          padding: [60, 60, 60, 60],
+          duration: 500,
+          maxZoom: 16,
+        });
+      }
+    },
   }));
+
+  useEffect(() => {
+    const layers = baseLayers.current;
+
+    if (!layers) return;
+
+    layers.light.setVisible(theme === "light");
+    layers.dark.setVisible(theme === "dark");
+  }, [theme]);
 
   useEffect(() => {
     if (!mapElement.current || mapInstance.current) return;
 
+    const cartoKey = import.meta.env.VITE_CARTO_API_KEY;
+
     const lightLayer = new TileLayer({
-      source: new OSM(),
-      visible: false,
+      source: new XYZ({
+        url: `https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png?key=${cartoKey}`,
+        attributions: "&copy; OpenStreetMap contributors &copy; CARTO",
+      }),
+      visible: theme === "light",
     });
 
     const darkLayer = new TileLayer({
-      source: new OSM(),
-      visible: true,
-      className: "geomind-dark-tiles",
+      source: new XYZ({
+        url: `https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png?key=${cartoKey}`,
+        attributions: "&copy; OpenStreetMap contributors &copy; CARTO",
+      }),
+      visible: theme === "dark",
     });
 
     const markerSource = new VectorSource();
@@ -520,6 +804,14 @@ const GeoMap = forwardRef<GeoMapHandle>(function GeoMap(_, ref) {
 
       const geometryType = geometry.getType();
 
+      if (
+        geometryType !== "Point" &&
+        geometryType !== "LineString" &&
+        geometryType !== "Polygon"
+      ) {
+        return;
+      }
+
       let lengthMeters: number | undefined;
       let areaSquareMeters: number | undefined;
       let perimeterMeters: number | undefined;
@@ -535,15 +827,35 @@ const GeoMap = forwardRef<GeoMapHandle>(function GeoMap(_, ref) {
         perimeterMeters = getLength(polygon);
       }
 
-      const coordinatesWGS84 = geometry
-        .clone()
-        .transform("EPSG:3857", "EPSG:4326")
-        .getCoordinates();
+      let coordinates: number[] | number[][] | number[][][];
+      let coordinatesWGS84: number[] | number[][] | number[][][];
+
+      if (geometry instanceof Point) {
+        coordinates = geometry.getCoordinates();
+        coordinatesWGS84 = geometry
+          .clone()
+          .transform("EPSG:3857", "EPSG:4326")
+          .getCoordinates();
+      } else if (geometry instanceof LineString) {
+        coordinates = geometry.getCoordinates();
+        coordinatesWGS84 = geometry
+          .clone()
+          .transform("EPSG:3857", "EPSG:4326")
+          .getCoordinates();
+      } else if (geometry instanceof Polygon) {
+        coordinates = geometry.getCoordinates();
+        coordinatesWGS84 = geometry
+          .clone()
+          .transform("EPSG:3857", "EPSG:4326")
+          .getCoordinates();
+      } else {
+        return;
+      }
 
       onFeatureSelectRef.current?.({
-        id: String(feature.getId() ?? feature.ol_uid),
+        id: String(feature.getId() ?? crypto.randomUUID()),
         geometryType,
-        coordinates: geometry.getCoordinates(),
+        coordinates,
         coordinatesWGS84,
         lengthMeters,
         areaSquareMeters,

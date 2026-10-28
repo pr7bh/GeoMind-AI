@@ -1,4 +1,4 @@
-
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
@@ -11,10 +11,12 @@ body,
 }
 
 body {
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: "Inter", sans-serif;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
-
-.ol-zoom{
+.ol-zoom {
   display: none;
 }
 
@@ -22,6 +24,43 @@ body {
   filter: invert(100%) hue-rotate(180deg) brightness(90%) contrast(90%);
 }
 
-.ol-attribution ul {
-    display: none;
-  }
+.ol-attribution{
+  display: none !important;
+}
+
+/* Thin, subtle scrollbars for GIS panels */
+.scrollbar-thin-dark,
+.scrollbar-thin-light {
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+}
+
+.scrollbar-thin-dark {
+  scrollbar-color: #10b981 transparent;
+}
+
+.scrollbar-thin-light {
+  scrollbar-color: #10b981 transparent;
+}
+
+.scrollbar-thin-dark::-webkit-scrollbar,
+.scrollbar-thin-light::-webkit-scrollbar {
+  width: 2px;
+}
+
+.scrollbar-thin-dark::-webkit-scrollbar-track,
+.scrollbar-thin-light::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin-dark::-webkit-scrollbar-thumb,
+.scrollbar-thin-light::-webkit-scrollbar-thumb {
+  background: #10b981;
+  border-radius: 9999px;
+  transition: background 0.2s ease;
+}
+
+.scrollbar-thin-dark::-webkit-scrollbar-thumb:hover,
+.scrollbar-thin-light::-webkit-scrollbar-thumb:hover {
+  background: #34d399;
+}

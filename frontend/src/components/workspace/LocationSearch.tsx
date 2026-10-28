@@ -1,13 +1,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import {
-  MapPin,
-  Search,
-  LoaderCircle,
-  X,
-  Navigation,
-} from "lucide-react";
+import { LoaderCircle, MapPin, Search, X } from "lucide-react";
 
 export interface LocationResult {
   place_id: number;
@@ -22,67 +16,60 @@ interface LocationSearchProps {
   onSelectLocation: (longitude: number, latitude: number) => void;
 }
 
-function useDebouncedValue<T>(value: T, delay = 1000): T {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setDebouncedValue(value);
-    }, delay);
-
-    return () => window.clearTimeout(timer);
-  }, [value, delay]);
-
-  return debouncedValue;
-}
+const MIN_QUERY_LENGTH = 3;
+const DEBOUNCE_DELAY = 500;
 
 export default function LocationSearch({
   theme,
   onSelectLocation,
 }: LocationSearchProps) {
+  const isDark = theme === "dark";
+
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<LocationResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [isFocused, setIsFocused] = useState(false);
 
-  const isDark = theme === "dark";
-  const debouncedQuery = useDebouncedValue(query, 1000);
-
   const inputRef = useRef<HTMLInputElement>(null);
   const requestControllerRef = useRef<AbortController | null>(null);
+  const requestIdRef = useRef(0);
   const lastRequestedQueryRef = useRef("");
-  const skipSearchForQueryRef = useRef<string | null>(null);
+  const skipNextAutoSearchRef = useRef(false);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
 
   const searchLocations = useCallback(
-    async (value: string, manual = false) => {
+    async (value: string, force = false) => {
       const searchTerm = value.trim();
 
-      if (searchTerm.length < 3) {
-        if (manual) {
-          setError("Enter at least 3 characters to search.");
-        } else {
-          setError("");
-        }
+      if (searchTerm.length < MIN_QUERY_LENGTH) {
+        requestControllerRef.current?.abort();
+        requestControllerRef.current = null;
+        requestIdRef.current += 1;
+        lastRequestedQueryRef.current = "";
 
         setResults([]);
         setLoading(false);
-        lastRequestedQueryRef.current = "";
+        setError(
+          force ? "Enter at least 3 characters to search." : ""
+        );
         return;
       }
 
-      // Prevent duplicate requests from manual and debounced search.
       if (
-        !manual &&
+        !force &&
         searchTerm === lastRequestedQueryRef.current
       ) {
         return;
       }
 
-      // Cancel the previous request before starting another.
       requestControllerRef.current?.abort();
 
       const controller = new AbortController();
+      const requestId = ++requestIdRef.current;
+
       requestControllerRef.current = controller;
       lastRequestedQueryRef.current = searchTerm;
 
@@ -100,88 +87,141 @@ export default function LocationSearch({
         const response = await fetch(
           `https://nominatim.openstreetmap.org/search?${params.toString()}`,
           {
+            method: "GET",
             headers: {
               Accept: "application/json",
             },
             signal: controller.signal,
-          },
+          }
         );
 
         if (!response.ok) {
+          if (response.status === 429) {
+            throw new Error(
+              "Too many searches. Please wait a moment and try again."
+            );
+          }
+
           throw new Error(
-            "Location search is temporarily unavailable. Please try again.",
+            `Location search failed (${response.status}). Please try again.`
           );
         }
 
         const data: LocationResult[] = await response.json();
 
-        if (controller.signal.aborted) return;
+        if (
+          controller.signal.aborted ||
+          requestId !== requestIdRef.current
+        ) {
+          return;
+        }
 
         setResults(data);
         setError(
           data.length === 0
             ? "No locations found. Try another search."
-            : "",
+            : ""
         );
       } catch (err) {
-        if (controller.signal.aborted) return;
+        if (
+          controller.signal.aborted ||
+          requestId !== requestIdRef.current
+        ) {
+          return;
+        }
 
         setResults([]);
-
         setError(
           err instanceof Error
             ? err.message
-            : "Unable to search locations. Please try again.",
+            : "Unable to search locations. Please try again."
         );
       } finally {
-        if (!controller.signal.aborted) {
+        if (requestId === requestIdRef.current) {
           setLoading(false);
+          requestControllerRef.current = null;
         }
       }
     },
-    [],
+    []
   );
 
-  // Automatic search after the user pauses typing.
+  // Automatically search after the user stops typing.
   useEffect(() => {
-    const searchTerm = debouncedQuery.trim();
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
 
-    if (skipSearchForQueryRef.current === searchTerm) {
-      skipSearchForQueryRef.current = null;
+    const searchTerm = query.trim();
+
+    if (skipNextAutoSearchRef.current) {
+      skipNextAutoSearchRef.current = false;
       return;
     }
 
-    if (searchTerm.length < 3) {
+    if (searchTerm.length < MIN_QUERY_LENGTH) {
       requestControllerRef.current?.abort();
       requestControllerRef.current = null;
+      requestIdRef.current += 1;
       lastRequestedQueryRef.current = "";
+
       setResults([]);
-      setError("");
       setLoading(false);
+      setError("");
       return;
     }
 
-    void searchLocations(searchTerm);
+    debounceTimerRef.current = setTimeout(() => {
+      void searchLocations(searchTerm);
+    }, DEBOUNCE_DELAY);
 
     return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, [query, searchLocations]);
+
+  // Cancel pending requests when the component unmounts.
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+
       requestControllerRef.current?.abort();
     };
-  }, [debouncedQuery, searchLocations]);
+  }, []);
 
-  // Manual search works immediately on click or Enter.
   function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
     void searchLocations(query, true);
   }
 
   function selectLocation(result: LocationResult) {
+    const longitude = Number(result.lon);
+    const latitude = Number(result.lat);
+
+    if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
+      setError("The selected location has invalid coordinates.");
+      return;
+    }
+
     requestControllerRef.current?.abort();
     requestControllerRef.current = null;
+    requestIdRef.current += 1;
 
-    skipSearchForQueryRef.current = result.display_name;
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
     lastRequestedQueryRef.current = result.display_name;
-
-    onSelectLocation(Number(result.lon), Number(result.lat));
+    skipNextAutoSearchRef.current = true;
 
     setQuery(result.display_name);
     setResults([]);
@@ -189,15 +229,21 @@ export default function LocationSearch({
     setLoading(false);
     setIsFocused(false);
 
+    onSelectLocation(longitude, latitude);
     inputRef.current?.blur();
   }
 
   function clearSearch() {
     requestControllerRef.current?.abort();
     requestControllerRef.current = null;
+    requestIdRef.current += 1;
 
-    skipSearchForQueryRef.current = null;
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
     lastRequestedQueryRef.current = "";
+    skipNextAutoSearchRef.current = true;
 
     setQuery("");
     setResults([]);
@@ -207,43 +253,37 @@ export default function LocationSearch({
     inputRef.current?.focus();
   }
 
+  const glassPanel = isDark
+    ? "border-white/[0.12] bg-neutral-950/65 text-white shadow-[0_18px_50px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.04)]"
+    : "border-white/80 bg-white/65 text-gray-900 shadow-[0_18px_50px_rgba(15,23,42,0.08),inset_0_1px_0_rgba(255,255,255,0.65)]";
+
   return (
     <div className="relative w-full">
       <form
         onSubmit={handleSearch}
-        className={`group relative flex min-h-[54px] items-center gap-3 rounded-2xl border px-3 backdrop-blur-xl transition-all duration-200 ${
+        className={`group relative flex min-h-[54px] items-center gap-3 overflow-hidden rounded-2xl border px-3 backdrop-blur-2xl transition-all duration-300 ${
           isDark
-            ? `bg-neutral-950/95 ${
+            ? `bg-neutral-950/55 ${
                 isFocused
-                  ? "border-emerald-500/60 shadow-[0_0_0_3px_rgba(16,185,129,0.10),0_12px_35px_rgba(0,0,0,0.35)]"
-                  : "border-white/10 shadow-[0_8px_30px_rgba(0,0,0,0.25)] hover:border-white/20"
+                  ? "border-emerald-400/45 shadow-[0_0_0_3px_rgba(16,185,129,0.07),0_12px_35px_rgba(0,0,0,0.2)]"
+                  : "border-white/[0.10] shadow-[0_8px_30px_rgba(0,0,0,0.15)] hover:border-white/20"
               }`
-            : `bg-white/95 ${
+            : `bg-white/55 ${
                 isFocused
-                  ? "border-emerald-600/50 shadow-[0_0_0_3px_rgba(5,150,105,0.08),0_12px_35px_rgba(15,23,42,0.08)]"
-                  : "border-gray-200 shadow-[0_8px_30px_rgba(15,23,42,0.07)] hover:border-gray-300"
+                  ? "border-emerald-500/40 shadow-[0_0_0_3px_rgba(5,150,105,0.06),0_12px_35px_rgba(15,23,42,0.05)]"
+                  : "border-white/80 shadow-[0_8px_30px_rgba(15,23,42,0.05)] hover:border-emerald-200/80"
               }`
         }`}
       >
-        
+       
 
         <div className="min-w-0 flex-1 py-2">
           <input
             ref={inputRef}
             value={query}
             onChange={(event) => {
-              const value = event.target.value;
-
-              setQuery(value);
+              setQuery(event.target.value);
               setError("");
-
-              if (value.trim().length < 3) {
-                requestControllerRef.current?.abort();
-                requestControllerRef.current = null;
-                lastRequestedQueryRef.current = "";
-                setResults([]);
-                setLoading(false);
-              }
             }}
             onFocus={() => setIsFocused(true)}
             onBlur={() => setIsFocused(false)}
@@ -257,15 +297,6 @@ export default function LocationSearch({
                 : "text-gray-900 placeholder:text-gray-400"
             }`}
           />
-
-          <div
-            className={`mt-1 flex items-center gap-1.5 text-[10px] ${
-              isDark ? "text-neutral-500" : "text-gray-400"
-            }`}
-          >
-            <Navigation size={10} className="text-emerald-500" />
-            <span>Global geospatial search</span>
-          </div>
         </div>
 
         {query && (
@@ -274,10 +305,10 @@ export default function LocationSearch({
             onClick={clearSearch}
             aria-label="Clear search"
             title="Clear search"
-            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors ${
+            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors ${
               isDark
-                ? "text-neutral-400 hover:bg-white/10 hover:text-white"
-                : "text-gray-400 hover:bg-gray-100 hover:text-gray-800"
+                ? "text-neutral-400 hover:bg-white/[0.08] hover:text-white"
+                : "text-gray-400 hover:bg-white/80 hover:text-gray-800"
             }`}
           >
             <X size={15} />
@@ -285,35 +316,33 @@ export default function LocationSearch({
         )}
 
         <button
-  type="submit"
-  disabled={loading || query.trim().length < 3}
-  aria-label="Search locations"
-  title="Search locations"
-  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-all duration-200 ${
-    isDark
-      ? "bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20"
-      : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-  } disabled:cursor-not-allowed disabled:opacity-40`}
->
-  {loading ? (
-    <LoaderCircle size={19} className="animate-spin" />
-  ) : (
-    <Search size={19} strokeWidth={1.8} />
-  )}
-</button>
+          type="submit"
+          disabled={loading || query.trim().length < MIN_QUERY_LENGTH}
+          aria-label="Search locations"
+          title="Search locations"
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-all duration-200 ${
+            isDark
+              ? "border-emerald-400/15 bg-emerald-400/[0.09] text-emerald-400 hover:bg-emerald-400/[0.16]"
+              : "border-emerald-200/60 bg-emerald-50/70 text-emerald-700 hover:bg-emerald-100/80"
+          } disabled:cursor-not-allowed disabled:opacity-40`}
+        >
+          {loading ? (
+            <LoaderCircle size={18} className="animate-spin" />
+          ) : (
+            <Search size={18} strokeWidth={1.8} />
+          )}
+        </button>
       </form>
 
-      {(results.length > 0 || error) && (
+      {(results.length > 0 || error || loading) && (
         <div
-          className={`absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-2xl border backdrop-blur-2xl ${
-            isDark
-              ? "border-white/10 bg-neutral-950/95 text-white shadow-[0_18px_45px_rgba(0,0,0,0.45)]"
-              : "border-gray-200 bg-white text-gray-900 shadow-[0_18px_45px_rgba(15,23,42,0.13)]"
-          }`}
+          className={`absolute left-0 right-0 top-full z-[100] mt-2 overflow-hidden rounded-2xl border backdrop-blur-2xl ${glassPanel}`}
         >
           <div
             className={`flex items-center justify-between border-b px-3 py-2.5 ${
-              isDark ? "border-white/[0.07]" : "border-gray-100"
+              isDark
+                ? "border-white/[0.08] bg-white/[0.025]"
+                : "border-gray-200/60 bg-white/25"
             }`}
           >
             <span
@@ -321,15 +350,39 @@ export default function LocationSearch({
                 isDark ? "text-neutral-400" : "text-gray-500"
               }`}
             >
-              {error ? "Search status" : "Location results"}
+              {loading
+                ? "Searching locations"
+                : error
+                  ? "Search status"
+                  : "Location results"}
             </span>
 
             {results.length > 0 && (
-              <span className="rounded-md bg-emerald-500/10 px-2 py-1 text-[10px] font-medium text-emerald-500">
+              <span
+                className={`rounded-md border px-2 py-1 text-[10px] font-medium ${
+                  isDark
+                    ? "border-emerald-400/15 bg-emerald-400/[0.08] text-emerald-400"
+                    : "border-emerald-200/60 bg-emerald-50/70 text-emerald-700"
+                }`}
+              >
                 {results.length} found
               </span>
             )}
           </div>
+
+          {loading && results.length === 0 && !error && (
+            <div
+              className={`flex items-center gap-3 px-4 py-5 text-xs ${
+                isDark ? "text-neutral-400" : "text-gray-500"
+              }`}
+            >
+              <LoaderCircle
+                size={16}
+                className="animate-spin text-emerald-500"
+              />
+              Looking up locations...
+            </div>
+          )}
 
           {error && (
             <p
@@ -346,9 +399,9 @@ export default function LocationSearch({
             <div
               className={`max-h-72 overflow-y-auto p-1.5 [scrollbar-width:thin] ${
                 isDark
-                  ? "[scrollbar-color:rgba(52,211,153,0.3)_transparent]"
-                  : "[scrollbar-color:rgba(5,150,105,0.3)_transparent]"
-              } [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-emerald-500/30`}
+                  ? "[scrollbar-color:rgba(52,211,153,0.35)_transparent]"
+                  : "[scrollbar-color:rgba(5,150,105,0.35)_transparent]"
+              } [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-emerald-500/35`}
               role="listbox"
               aria-label="Location search results"
             >
@@ -360,20 +413,20 @@ export default function LocationSearch({
                   aria-selected={false}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => selectLocation(result)}
-                  className={`flex w-full items-start gap-3 rounded-xl p-3 text-left transition-colors ${
+                  className={`flex w-full items-start gap-3 rounded-xl border border-transparent p-3 text-left transition-colors duration-200 ${
                     isDark
-                      ? "hover:bg-white/[0.06] focus-visible:bg-white/[0.06]"
-                      : "hover:bg-emerald-50/70 focus-visible:bg-emerald-50/70"
+                      ? "hover:border-white/[0.05] hover:bg-white/[0.055] focus-visible:bg-white/[0.06]"
+                      : "hover:border-emerald-100/70 hover:bg-emerald-50/60 focus-visible:bg-emerald-50/60"
                   }`}
                 >
                   <div
-                    className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+                    className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${
                       isDark
-                        ? "bg-emerald-400/10 text-emerald-400"
-                        : "bg-emerald-50 text-emerald-700"
+                        ? "border-emerald-400/10 bg-emerald-400/[0.08] text-emerald-400"
+                        : "border-emerald-100/70 bg-emerald-50/70 text-emerald-700"
                     }`}
                   >
-                    <MapPin size={16} />
+                    <MapPin size={16} strokeWidth={1.8} />
                   </div>
 
                   <span className="min-w-0 flex-1">
@@ -404,10 +457,10 @@ export default function LocationSearch({
           )}
 
           <div
-            className={`border-t px-3 py-2 text-[10px] ${
+            className={`border-t px-3 py-2.5 text-[10px] ${
               isDark
-                ? "border-white/[0.07] text-neutral-500"
-                : "border-gray-100 text-gray-400"
+                ? "border-white/[0.08] bg-white/[0.015] text-neutral-500"
+                : "border-gray-200/60 bg-white/25 text-gray-400"
             }`}
           >
             Location data provided by OpenStreetMap Nominatim
