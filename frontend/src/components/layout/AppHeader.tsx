@@ -1,18 +1,25 @@
+import type { ReactNode } from 'react';
 import { Map, Activity, Sparkles } from 'lucide-react';
 
 interface AppHeaderProps {
   theme: 'light' | 'dark';
+  /** Centre slot, e.g. location search. */
+  center?: ReactNode;
+  /** Trailing actions, e.g. the theme switch. */
+  actions?: ReactNode;
 }
 
-export default function AppHeader({ theme }: AppHeaderProps) {
+export default function AppHeader({ theme, center, actions }: AppHeaderProps) {
   const isDark = theme === 'dark';
 
   return (
+    // Floats over the full-screen map; only the bar itself takes clicks.
+    <div className="pointer-events-none absolute inset-x-3 top-3 z-40 max-[900px]:inset-x-2 max-[900px]:top-2">
     <header
-      className={`flex h-16 items-center justify-between border-b px-2 transition-colors duration-200 ${
+      className={`pointer-events-auto flex h-[60px] items-center gap-3 rounded-2xl border px-3 backdrop-blur-2xl transition-colors duration-200 max-[900px]:h-14 max-[900px]:gap-2 max-[900px]:px-2 ${
         isDark
-          ? 'border-neutral-800/80 bg-black'
-          : 'border-gray-200 bg-white'
+          ? 'border-white/10 bg-neutral-950/60 shadow-[0_8px_32px_rgba(0,0,0,0.35)]'
+          : 'border-gray-200/70 bg-white/70 shadow-[0_8px_32px_rgba(15,23,42,0.10)]'
       }`}
     >
       {/* Brand */}
@@ -27,14 +34,14 @@ export default function AppHeader({ theme }: AppHeaderProps) {
           <Map size={21} strokeWidth={1.8} />
         </div>
 
-        <div className="min-w-0">
+        <div className="min-w-0 max-sm:hidden">
           <h1 className="text-lg font-semibold tracking-tight">
             GeoMind{' '}
             <span className="text-emerald-500">AI</span>
           </h1>
 
           <p
-            className={`mt-0.5 truncate text-[11px] tracking-wide ${
+            className={`mt-0.5 truncate text-[11px] tracking-wide max-lg:hidden ${
               isDark ? 'text-neutral-500' : 'text-gray-500'
             }`}
           >
@@ -43,10 +50,12 @@ export default function AppHeader({ theme }: AppHeaderProps) {
         </div>
       </div>
 
+      <div className="flex min-w-0 flex-1 justify-center">{center}</div>
+
       {/* Workspace status */}
-      <div className="flex shrink-0 items-center gap-3">
+      <div className="flex shrink-0 items-center gap-3 max-[900px]:gap-2">
         <div
-          className={`hidden items-center gap-1.5 rounded-lg border px-2.5 py-1.5 sm:flex ${
+          className={`hidden items-center gap-1.5 rounded-lg border px-2.5 py-1.5 xl:flex ${
             isDark
               ? 'border-neutral-800 bg-neutral-900/60 text-neutral-400'
               : 'border-gray-200 bg-gray-50 text-gray-500'
@@ -59,7 +68,7 @@ export default function AppHeader({ theme }: AppHeaderProps) {
         </div>
 
         <div
-          className={`flex items-center gap-2 rounded-lg px-2.5 py-1.5 ${
+          className={`flex items-center gap-2 rounded-lg px-2.5 py-1.5 max-[900px]:hidden ${
             isDark ? 'bg-emerald-500/[0.07]' : 'bg-emerald-50'
           }`}
           title="Workspace status"
@@ -93,7 +102,9 @@ export default function AppHeader({ theme }: AppHeaderProps) {
             }
           />
         </div>
+        {actions}
       </div>
     </header>
+    </div>
   );
 }

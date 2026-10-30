@@ -39,6 +39,7 @@ import { WORKSPACE_TOOLS } from "../tools/registry";
 import type { WorkspaceToolId } from "../tools/registry";
 import { useMapPicker } from "../map/useMapPicker";
 import MapPickBanner from "../map/MapPickBanner";
+import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../../lib/useMediaQuery";
 import { postJSON } from "../../lib/api";
 
 type Theme = "light" | "dark";
@@ -57,6 +58,10 @@ export default function AppLayout() {
   const [importedLayers, setImportedLayers] = useState<ImportedLayerInfo[]>([]);
   const [isResearchOpen, setIsResearchOpen] = useState(false);
   const [activeTool, setActiveTool] = useState<WorkspaceToolId | null>(null);
+  const [isSidebarExpandedState, setIsSidebarExpanded] = useState(false);
+  const compactLayout = useMediaQuery(COMPACT_LAYOUT_QUERY);
+  // The rail is always collapsed on small screens.
+  const sidebarExpanded = isSidebarExpandedState && !compactLayout;
   const [isBaseLayerVisible, setIsBaseLayerVisible] = useState(true);
   const [, setBaseMap] = useState<BaseMapType>("dark");
   const [drawingMode, setDrawingMode] = useState<DrawingMode>("none");
@@ -628,69 +633,19 @@ export default function AppLayout() {
 
   return (
     <main
-      className={`flex h-screen w-screen flex-col overflow-hidden ${
+      className={`relative h-dvh w-screen overflow-hidden ${
         isDark ? "bg-black text-white" : "bg-white text-black"
       }`}
     >
-      {/* Application header */}
-      <header className="z-40 flex h-16 shrink-0 items-center border-b border-neutral-800/70">
-        <div className="min-w-0 flex-1">
-          <AppHeader theme={theme} />
-        </div>
-
-        <div
-          className={`flex h-full shrink-0 items-center border-l px-4 ${
-            isDark ? "border-neutral-800 bg-black" : "border-gray-200 bg-white"
-          }`}
-        >
-          <button
-            type="button"
-            onClick={() =>
-              setTheme((current) => (current === "dark" ? "light" : "dark"))
-            }
-            aria-label={`Switch to ${isDark ? "light" : "dark"} mode`}
-            title={`Switch to ${isDark ? "light" : "dark"} mode`}
-            className={`rounded-lg border p-2 transition-colors ${
-              isDark
-                ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800"
-                : "border-gray-200 text-gray-700 hover:bg-gray-100"
-            }`}
-          >
-            {isDark ? <Sun size={18} /> : <Moon size={18} />}
-          </button>
-        </div>
-      </header>
-
-      {/* Main workspace */}
-      <div className="relative flex min-h-0 flex-1 overflow-hidden">
-        <Sidebar
-          theme={theme}
-          activeTool={activeTool}
-          isResearchOpen={isResearchOpen}
-          onSelectTool={handleSelectTool}
-          onToggleResearch={() => setIsResearchOpen((open) => !open)}
-        />
-
-        {/* Map and its floating controls */}
-        <section className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
+      {/* Full-screen map. Header, sidebar and panels float above it and
+          never reserve layout space, so the map is never resized by them. */}
+      <section className="absolute inset-0">
           <div className="absolute inset-0 z-0">
             <GeoMap ref={mapRef} theme={theme} />
           </div>
-          {/* Premium GIS location search */}
 
-          <div className="pointer-events-none absolute left-1/2 top-4 z-50 w-[min(28rem,calc(100%-2rem))] -translate-x-1/2 max-[900px]:left-2 max-[900px]:w-[calc(100%-4.5rem)] max-[900px]:translate-x-0">
-            <div className="pointer-events-auto w-full">
-              <LocationSearch
-                theme={theme}
-                onSelectLocation={(longitude, latitude) => {
-                  mapRef.current?.goToLocation(longitude, latitude);
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Map navigation controls: top-right */}
-          <div className="pointer-events-none absolute right-4 top-4 z-20 max-w-[calc(100%-2rem)]">
+          {/* Map navigation controls: top-right, below the header */}
+          <div className="pointer-events-none absolute right-3 top-[5.5rem] z-20 max-[900px]:right-2 max-[900px]:top-[4.5rem]">
             <div className="pointer-events-auto *:static! *:inset-auto! *:m-0! *:transform-none!">
               <MapToolbar
                 theme={theme}
@@ -703,15 +658,19 @@ export default function AppLayout() {
             </div>
           </div>
 
-          {/* Workspace status: bottom-left */}
-          <div className="pointer-events-none absolute bottom-4 left-4 z-10 max-w-[calc(100%-2rem)] max-[900px]:hidden">
+          {/* Workspace status: bottom-left, beside the sidebar */}
+          <div
+            className={`pointer-events-none absolute bottom-3 z-10 max-[900px]:hidden ${
+              sidebarExpanded ? "left-[12.5rem]" : "left-[5.5rem]"
+            }`}
+          >
             <div className="pointer-events-auto *:static! *:inset-auto! *:m-0! *:transform-none!">
               <WorkspaceStatus theme={theme} />
             </div>
           </div>
 
-          {/* Drawing controls: bottom-center */}
-          <div className="pointer-events-none absolute bottom-4 right-0 z-20 w-max max-w-[calc(100%-2rem)] -translate-x-1/2">
+          {/* Drawing controls: bottom-right */}
+          <div className="pointer-events-none absolute bottom-3 right-3 z-20 max-[900px]:bottom-2 max-[900px]:right-2">
             <div className="pointer-events-auto *:static! *:inset-auto! *:m-0! *:transform-none!">
               <DrawingToolbar
                 theme={theme}
@@ -729,7 +688,7 @@ export default function AppLayout() {
 
           {/* Map-pick instruction */}
           {picker.active && (
-            <div className="pointer-events-none absolute left-1/2 top-20 z-50 -translate-x-1/2 max-[900px]:left-2 max-[900px]:right-16 max-[900px]:translate-x-0">
+            <div className="pointer-events-none absolute left-1/2 top-[5.5rem] z-50 -translate-x-1/2 max-[900px]:left-[4.5rem] max-[900px]:right-16 max-[900px]:top-[4.5rem] max-[900px]:translate-x-0">
               <MapPickBanner
                 isDark={isDark}
                 pick={picker.active}
@@ -739,7 +698,11 @@ export default function AppLayout() {
           )}
 
           {/* Active tool panel. All panels stay mounted so selections survive switching. */}
-          <div className="pointer-events-none absolute bottom-16 left-4 top-4 z-30 flex items-start max-[900px]:bottom-2 max-[900px]:left-2 max-[900px]:right-16 max-[900px]:top-auto max-[900px]:items-end">
+          <div
+            className={`pointer-events-none absolute bottom-16 top-[5.5rem] z-30 flex items-start max-[900px]:bottom-2 max-[900px]:left-[4.5rem] max-[900px]:right-16 max-[900px]:top-auto max-[900px]:items-end ${
+              sidebarExpanded ? "left-[12.5rem]" : "left-[5.5rem]"
+            }`}
+          >
             {WORKSPACE_TOOLS.map((tool) => (
               <ToolPanel
                 key={tool.id}
@@ -759,10 +722,12 @@ export default function AppLayout() {
               {/* Drag bounds only (right of the tool panel, below the search bar);
                   the inspector itself re-enables pointer events. */}
               <div
-                className={`pointer-events-none absolute bottom-0 right-16 top-20 max-[900px]:bottom-auto max-[900px]:left-2 max-[900px]:right-16 max-[900px]:top-[4.5rem] ${
+                className={`pointer-events-none absolute bottom-3 top-[5.5rem] max-[900px]:bottom-auto max-[900px]:left-[4.5rem] max-[900px]:right-16 max-[900px]:top-[4.5rem] ${
+                  isResearchOpen ? "right-[27.25rem]" : "right-16"
+                } ${
                   activeTool
-                    ? "left-[21.5rem] max-[900px]:h-[36vh]"
-                    : "left-0 max-[900px]:h-[60vh]"
+                    ? `${sidebarExpanded ? "left-[33.25rem]" : "left-[26.25rem]"} max-[900px]:h-[36vh]`
+                    : `${sidebarExpanded ? "left-[12.5rem]" : "left-[5.5rem]"} max-[900px]:h-[60vh]`
                 }`}
               >
                 <FeatureInspector
@@ -783,10 +748,52 @@ mapRef.current?.clearFeatureSelection();
             </div>
           )}
 
-        </section>
+      </section>
 
-        {/* Research panel remains outside the map canvas */}
+      <Sidebar
+        theme={theme}
+        activeTool={activeTool}
+        isResearchOpen={isResearchOpen}
+        expanded={sidebarExpanded}
+        onSelectTool={handleSelectTool}
+        onToggleResearch={() => setIsResearchOpen((open) => !open)}
+        onToggleExpanded={() => setIsSidebarExpanded((value) => !value)}
+      />
+
+      <AppHeader
+        theme={theme}
+        center={
+          <div className="w-full max-w-md">
+            <LocationSearch
+              theme={theme}
+              onSelectLocation={(longitude, latitude) => {
+                mapRef.current?.goToLocation(longitude, latitude);
+              }}
+            />
+          </div>
+        }
+        actions={
+          <button
+            type="button"
+            onClick={() =>
+              setTheme((current) => (current === "dark" ? "light" : "dark"))
+            }
+            aria-label={`Switch to ${isDark ? "light" : "dark"} mode`}
+            title={`Switch to ${isDark ? "light" : "dark"} mode`}
+            className={`rounded-xl border p-2 transition-colors ${
+              isDark
+                ? "border-white/10 text-neutral-200 hover:bg-white/[0.08]"
+                : "border-gray-200 text-gray-700 hover:bg-gray-100"
+            }`}
+          >
+            {isDark ? <Sun size={18} /> : <Moon size={18} />}
+          </button>
+        }
+      />
+
+        {/* Research panel floats on the right, left of the map toolbar column */}
         {isResearchOpen && (
+          <div className="pointer-events-none absolute bottom-3 right-16 top-[5.5rem] z-40 w-[22.5rem] max-[900px]:inset-x-2 max-[900px]:bottom-2 max-[900px]:top-[4.5rem] max-[900px]:z-50 max-[900px]:w-auto">
           <ResearchPanel
             theme={theme}
             onClose={() => setIsResearchOpen(false)}
@@ -826,6 +833,7 @@ mapRef.current?.clearFeatureSelection();
   });
 }}
           />
+          </div>
         )}
 
         {/* GeoJSON import dialog */}
@@ -845,7 +853,6 @@ mapRef.current?.clearFeatureSelection();
             }}
           />
         )}
-      </div>
     </main>
   );
 }

@@ -194,10 +194,10 @@ export default function ResearchPanel({
 
   return (
     <aside
-      className={`flex h-full w-90 max-w-full shrink-0 flex-col border-l transition-colors duration-200 max-[900px]:absolute max-[900px]:inset-y-0 max-[900px]:right-0 max-[900px]:z-50 max-[900px]:w-full ${
+      className={`pointer-events-auto flex h-full w-full flex-col overflow-hidden rounded-2xl border backdrop-blur-2xl transition-colors duration-200 ${
         isDark
-          ? "border-neutral-800 bg-black text-neutral-100"
-          : "border-gray-200 bg-white text-gray-900"
+          ? "border-white/10 bg-neutral-950/80 text-neutral-100 shadow-[0_8px_32px_rgba(0,0,0,0.35)]"
+          : "border-gray-200/70 bg-white/85 text-gray-900 shadow-[0_8px_32px_rgba(15,23,42,0.10)]"
       }`}
     >
       {/* Header */}
