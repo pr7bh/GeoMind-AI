@@ -43,6 +43,12 @@ import { postJSON } from "../../lib/api";
 
 type Theme = "light" | "dark";
 
+const LAYER_SOURCE_LABELS: Record<ImportedLayerInfo["kind"], string> = {
+  discovery: "OpenStreetMap",
+  imported: "Imported",
+  analysis: "Analysis",
+};
+
 export default function AppLayout() {
   const [theme, setTheme] = useState<Theme>(() => {
     const savedTheme = localStorage.getItem("geomind-theme");
@@ -256,8 +262,7 @@ export default function AppLayout() {
     nearest: <NearestFeatureTool {...toolProps} picker={picker} />,
     buffer: (
       <BufferTool
-        theme={theme}
-        mapRef={mapRef}
+        {...toolProps}
         picker={picker}
         onLayersChanged={refreshImportedLayers}
       />
@@ -422,11 +427,27 @@ export default function AppLayout() {
                             isDark ? "text-neutral-400" : "text-gray-500"
                           }`}
                         >
-                          {layer.count} features
-                          {layer.kind === "discovery" && " · OpenStreetMap"}
+                          {layer.count} feature{layer.count === 1 ? "" : "s"}
                         </p>
 
                         <div className="mt-2 flex flex-wrap gap-1">
+                          <span
+                            className={`rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${
+                              layer.kind === "discovery"
+                                ? isDark
+                                  ? "border-amber-400/20 bg-amber-400/10 text-amber-300"
+                                  : "border-amber-200 bg-amber-50 text-amber-700"
+                                : layer.kind === "analysis"
+                                  ? isDark
+                                    ? "border-violet-400/20 bg-violet-400/10 text-violet-300"
+                                    : "border-violet-200 bg-violet-50 text-violet-700"
+                                  : isDark
+                                    ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300"
+                                    : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            }`}
+                          >
+                            {LAYER_SOURCE_LABELS[layer.kind]}
+                          </span>
                           {layer.geometryTypes.map((type) => (
                             <span
                               key={type}
@@ -641,7 +662,7 @@ export default function AppLayout() {
       </header>
 
       {/* Main workspace */}
-      <div className="flex min-h-0 flex-1 overflow-hidden">
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <Sidebar
           theme={theme}
           activeTool={activeTool}
@@ -657,7 +678,7 @@ export default function AppLayout() {
           </div>
           {/* Premium GIS location search */}
 
-          <div className="pointer-events-none absolute left-1/2 top-4 z-50 w-[min(28rem,calc(100%-2rem))] -translate-x-1/2">
+          <div className="pointer-events-none absolute left-1/2 top-4 z-50 w-[min(28rem,calc(100%-2rem))] -translate-x-1/2 max-[900px]:left-2 max-[900px]:w-[calc(100%-4.5rem)] max-[900px]:translate-x-0">
             <div className="pointer-events-auto w-full">
               <LocationSearch
                 theme={theme}
@@ -683,7 +704,7 @@ export default function AppLayout() {
           </div>
 
           {/* Workspace status: bottom-left */}
-          <div className="pointer-events-none absolute bottom-4 left-4 z-10 max-w-[calc(100%-2rem)]">
+          <div className="pointer-events-none absolute bottom-4 left-4 z-10 max-w-[calc(100%-2rem)] max-[900px]:hidden">
             <div className="pointer-events-auto *:static! *:inset-auto! *:m-0! *:transform-none!">
               <WorkspaceStatus theme={theme} />
             </div>
@@ -708,7 +729,7 @@ export default function AppLayout() {
 
           {/* Map-pick instruction */}
           {picker.active && (
-            <div className="pointer-events-none absolute left-1/2 top-20 z-50 -translate-x-1/2">
+            <div className="pointer-events-none absolute left-1/2 top-20 z-50 -translate-x-1/2 max-[900px]:left-2 max-[900px]:right-16 max-[900px]:translate-x-0">
               <MapPickBanner
                 isDark={isDark}
                 pick={picker.active}
@@ -718,7 +739,7 @@ export default function AppLayout() {
           )}
 
           {/* Active tool panel. All panels stay mounted so selections survive switching. */}
-          <div className="pointer-events-none absolute bottom-16 left-4 top-4 z-30 flex items-start">
+          <div className="pointer-events-none absolute bottom-16 left-4 top-4 z-30 flex items-start max-[900px]:bottom-2 max-[900px]:left-2 max-[900px]:right-16 max-[900px]:top-auto max-[900px]:items-end">
             {WORKSPACE_TOOLS.map((tool) => (
               <ToolPanel
                 key={tool.id}
@@ -738,8 +759,10 @@ export default function AppLayout() {
               {/* Drag bounds only (right of the tool panel, below the search bar);
                   the inspector itself re-enables pointer events. */}
               <div
-                className={`pointer-events-none absolute bottom-0 right-0 top-20 ${
-                  activeTool ? "left-[21.5rem]" : "left-0"
+                className={`pointer-events-none absolute bottom-0 right-16 top-20 max-[900px]:bottom-auto max-[900px]:left-2 max-[900px]:right-16 max-[900px]:top-[4.5rem] ${
+                  activeTool
+                    ? "left-[21.5rem] max-[900px]:h-[36vh]"
+                    : "left-0 max-[900px]:h-[60vh]"
                 }`}
               >
                 <FeatureInspector

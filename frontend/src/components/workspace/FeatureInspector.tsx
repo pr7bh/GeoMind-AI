@@ -9,9 +9,12 @@ import {
   Calculator,
   Database,
   FlaskConical,
+  ChevronRight,
 } from "lucide-react";
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { postJSON } from "../../lib/api";
+import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../../lib/useMediaQuery";
 
 interface FeatureInspectorProps {
   theme: "light" | "dark";
@@ -29,6 +32,44 @@ interface FeatureInspectorProps {
     properties: Record<string, unknown>;
     distanceMetres: number;
   } | null;
+}
+
+interface InspectorSectionProps {
+  isDark: boolean;
+  title: string;
+  count?: number;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}
+
+function InspectorSection({
+  isDark,
+  title,
+  count,
+  defaultOpen = true,
+  children,
+}: InspectorSectionProps) {
+  return (
+    <details open={defaultOpen} className="group">
+      <summary
+        className={`flex cursor-pointer list-none items-center gap-2 rounded-lg py-1 text-[10px] font-semibold uppercase tracking-[0.14em] [&::-webkit-details-marker]:hidden ${
+          isDark ? "text-neutral-400 hover:text-neutral-200" : "text-gray-500 hover:text-gray-800"
+        }`}
+      >
+        <ChevronRight
+          size={12}
+          className="shrink-0 transition-transform group-open:rotate-90"
+        />
+        <span className="flex-1">{title}</span>
+        {count !== undefined && (
+          <span className="rounded-md border border-current/20 px-1.5 text-[10px] font-medium normal-case tracking-normal">
+            {count}
+          </span>
+        )}
+      </summary>
+      <div className="mt-2">{children}</div>
+    </details>
+  );
 }
 
 function formatLength(meters: number): string {
@@ -131,6 +172,8 @@ export default function FeatureInspector({
     }
   }
 
+  const compact = useMediaQuery(COMPACT_LAYOUT_QUERY);
+
   if (!feature) return null;
 
   const geometryIcon =
@@ -169,32 +212,43 @@ export default function FeatureInspector({
 
   const GeometryIcon = geometryIcon;
 
-  const coordinatesText = JSON.stringify(feature.coordinates, null, 2);
+  const isLinear =
+    feature.geometryType === "LineString" ||
+    feature.geometryType === "MultiLineString";
+  const isAreal =
+    feature.geometryType === "Polygon" || feature.geometryType === "MultiPolygon";
+  const featureTitle = String(
+    osm?.display_name ??
+      feature.properties?.name ??
+      feature.properties?.Name ??
+      nearestFeatureDetails?.properties.name ??
+      `${feature.geometryType} feature`,
+  );
+  const sourceLabel = osm
+    ? "OpenStreetMap"
+    : nearestFeatureDetails
+      ? "Analysis result"
+      : "Drawn on map";
+  const badgeClass = `rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${
+    isDark
+      ? "border-emerald-400/20 bg-emerald-400/8 text-emerald-300"
+      : "border-emerald-200 bg-emerald-50 text-emerald-700"
+  }`;
 
-  return (
-    <Rnd
-      default={{
-        x: 0,
-        y: 0,
-        width: 680,
-        height: 440,
-      }}
-      minWidth={400}
-      minHeight={280}
-      bounds="parent"
-      dragHandleClassName="feature-inspector-drag-handle"
-      enableResizing={{
-        top: true,
-        right: true,
-        bottom: true,
-        left: true,
-        topRight: true,
-        bottomRight: true,
-        bottomLeft: true,
-        topLeft: true,
-      }}
-      className="pointer-events-auto z-20"
-    >
+  // Map geometries are EPSG:3857; show users WGS84 longitude/latitude.
+  const coordinatesText = JSON.stringify(
+    feature.coordinatesWGS84,
+    (_, value) => (typeof value === "number" ? Number(value.toFixed(6)) : value),
+    feature.geometryType === "Point" ? undefined : 1,
+  );
+  const pointLonLat =
+    feature.geometryType === "Point" && Array.isArray(feature.coordinatesWGS84)
+      ? (feature.coordinatesWGS84 as number[])
+          .map((value) => value.toFixed(6))
+          .join(", ")
+      : null;
+
+  const panel = (
       <aside
         className={`flex h-full w-full flex-col overflow-hidden rounded-2xl border backdrop-blur-2xl transition-colors duration-300 ${
           isDark
@@ -261,58 +315,26 @@ export default function FeatureInspector({
               : "[scrollbar-color:rgba(5,150,105,0.3)_transparent] [&::-webkit-scrollbar-thumb]:bg-emerald-600/25 hover:[&::-webkit-scrollbar-thumb]:bg-emerald-600/50"
           } [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar]:h-1 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full`}
         >
-          {/* Feature metadata */}
-          <section>
-            <div className="mb-3 flex items-center justify-between">
-              <p
-                className={`text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                  isDark ? "text-neutral-400" : "text-gray-500"
-                }`}
-              >
-                Feature details
-              </p>
-              <span
-                className={`rounded-lg border px-2 py-1 text-[10px] font-medium ${
-                  isDark
-                    ? "border-white/8 bg-white/4 text-neutral-400"
-                    : "border-gray-200/70 bg-white/50 text-gray-500"
-                }`}
-              >
-                Selected
-              </span>
+          {/* Feature identity */}
+          <section
+            className={`rounded-xl border p-3 ${
+              isDark ? "border-white/8 bg-white/2.5" : "border-gray-200/80 bg-white/50"
+            }`}
+          >
+            <p className="break-words text-base font-semibold tracking-tight">
+              {featureTitle}
+            </p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <span className={badgeClass}>{feature.geometryType}</span>
+              <span className={badgeClass}>{sourceLabel}</span>
             </div>
-
-            <div
-              className={`rounded-xl border p-3 backdrop-blur-xl ${
-                isDark
-                  ? "border-white/8 bg-white/2.5"
-                  : "border-white/80 bg-white/40"
-              }`}
-            >
-              <p
-                className={`text-[11px] ${
-                  isDark ? "text-neutral-400" : "text-gray-500"
-                }`}
-              >
-                Feature ID
-              </p>
-              <p className="mt-1.5 break-all font-mono text-xs leading-relaxed">
-                {feature.id}
-              </p>
-            </div>
+            <p className="mt-2 text-[11px] text-neutral-500">Feature ID</p>
+            <p className="mt-0.5 break-all font-mono text-xs">{feature.id}</p>
           </section>
 
           {/* OpenStreetMap attributes */}
           {osm && (
-            <section>
-              <p
-                className={`mb-3 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                  isDark ? "text-neutral-400" : "text-gray-500"
-                }`}
-              >
-                OpenStreetMap
-              </p>
-
+            <InspectorSection isDark={isDark} title="OpenStreetMap">
               <div className="space-y-2">
                 {osmRows.map(([label, value]) => (
                   <div key={label} className={cardClass}>
@@ -333,44 +355,34 @@ export default function FeatureInspector({
                   </a>
                 </div>
               </div>
+            </InspectorSection>
+          )}
 
-              {osmTags.length > 0 && (
-                <>
-                  <p
-                    className={`mb-2 mt-4 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                      isDark ? "text-neutral-400" : "text-gray-500"
-                    }`}
-                  >
-                    OSM tags ({osmTags.length})
+          {osmTags.length > 0 && (
+            <InspectorSection
+              isDark={isDark}
+              title="Raw OSM tags"
+              count={osmTags.length}
+              defaultOpen={osmTags.length <= 8}
+            >
+              <div className={`${cardClass} space-y-1`}>
+                {osmTags.map(([key, value]) => (
+                  <p key={key} className="break-words font-mono text-[11px]">
+                    <span className="text-neutral-500">{key}</span> = {value}
                   </p>
-                  <div className={`${cardClass} space-y-1`}>
-                    {osmTags.map(([key, value]) => (
-                      <p key={key} className="break-words font-mono text-[11px]">
-                        <span className="text-neutral-500">{key}</span> = {value}
-                      </p>
-                    ))}
-                  </div>
-                </>
-              )}
-            </section>
+                ))}
+              </div>
+            </InspectorSection>
           )}
 
           {/* Geometry measurements */}
-          {(feature.geometryType === "LineString" &&
+          {(isLinear &&
             feature.lengthMeters !== undefined) ||
-          (feature.geometryType === "Polygon" &&
+          (isAreal &&
             feature.areaSquareMeters !== undefined) ? (
-            <section>
-              <p
-                className={`mb-3 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                  isDark ? "text-neutral-400" : "text-gray-500"
-                }`}
-              >
-                Measurements
-              </p>
-
+            <InspectorSection isDark={isDark} title="Measurements">
               <div className="grid grid-cols-2 gap-2">
-                {feature.geometryType === "LineString" &&
+                {isLinear &&
                   feature.lengthMeters !== undefined && (
                     <div
                       className={`rounded-xl border p-3 backdrop-blur-xl ${
@@ -395,7 +407,7 @@ export default function FeatureInspector({
                     </div>
                   )}
 
-                {feature.geometryType === "Polygon" &&
+                {isAreal &&
                   feature.areaSquareMeters !== undefined && (
                     <div
                       className={`rounded-xl border p-3 backdrop-blur-xl ${
@@ -420,7 +432,7 @@ export default function FeatureInspector({
                     </div>
                   )}
 
-                {feature.geometryType === "Polygon" &&
+                {isAreal &&
                   feature.perimeterMeters !== undefined && (
                     <div
                       className={`rounded-xl border p-3 backdrop-blur-xl ${
@@ -445,20 +457,12 @@ export default function FeatureInspector({
                     </div>
                   )}
               </div>
-            </section>
+            </InspectorSection>
           ) : null}
 
-          {/* Backend area calculation */}
+          {/* Server-side area calculation */}
           {feature.geometryType === "Polygon" && (
-            <section>
-              <p
-                className={`mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                  isDark ? "text-neutral-400" : "text-gray-500"
-                }`}
-              >
-                Spatial tools
-              </p>
-
+            <InspectorSection isDark={isDark} title="Geodesic area (server)">
               <button
                 type="button"
                 onClick={calculateAreaWithBackend}
@@ -504,18 +508,10 @@ export default function FeatureInspector({
               {areaError && (
                 <p className="mt-2 text-xs text-red-500">{areaError}</p>
               )}
-            </section>
+            </InspectorSection>
           )}
           {nearestFeatureDetails && (
-  <section>
-    <p
-      className={`mb-3 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-        isDark ? "text-neutral-400" : "text-gray-500"
-      }`}
-    >
-      Nearest-feature analysis
-    </p>
-
+  <InspectorSection isDark={isDark} title="Nearest-feature analysis">
     <div
       className={`mb-3 rounded-xl border p-3 ${
         isDark
@@ -562,39 +558,13 @@ export default function FeatureInspector({
         </p>
       )}
     </div>
-  </section>
+  </InspectorSection>
 )}
 
           {/* Buffer analysis */}
           {(feature.geometryType === "Point" ||
             feature.geometryType === "LineString") && (
-            <section
-              className={`border-t pt-4 ${
-                isDark ? "border-white/9" : "border-gray-200/70"
-              }`}
-            >
-              <div className="mb-3 flex items-center gap-2">
-                <div
-                  className={`flex h-8 w-8 items-center justify-center rounded-xl border ${
-                    isDark
-                      ? "border-emerald-400/10 bg-emerald-400/[0.07] text-emerald-400"
-                      : "border-emerald-200/60 bg-emerald-50/70 text-emerald-700"
-                  }`}
-                >
-                  <Ruler size={14} />
-                </div>
-                <div>
-                  <h4 className="text-xs font-semibold">Buffer analysis</h4>
-                  <p
-                    className={`mt-0.5 text-[10px] ${
-                      isDark ? "text-neutral-400" : "text-gray-500"
-                    }`}
-                  >
-                    Create a surrounding zone
-                  </p>
-                </div>
-              </div>
-
+            <InspectorSection isDark={isDark} title="Buffer analysis">
               <label
                 className={`mb-1.5 block text-[11px] ${
                   isDark ? "text-neutral-400" : "text-gray-500"
@@ -639,9 +609,12 @@ export default function FeatureInspector({
               {bufferError && (
                 <p className="mt-2 text-xs text-red-500">{bufferError}</p>
               )}
-            </section>
+            </InspectorSection>
           )}
 
+          {(feature.geometryType === "Polygon" || pointAnalysisResult) && (
+            <InspectorSection isDark={isDark} title="Points in polygon">
+              <div className="space-y-3">
           {/* Point-in-polygon results */}
           {pointAnalysisResult && (
             <section
@@ -724,18 +697,16 @@ export default function FeatureInspector({
               Clear Analysis
             </button>
           )}
+              </div>
+            </InspectorSection>
+          )}
 
           {/* Coordinates */}
-          <section>
+          <InspectorSection isDark={isDark} title="Coordinates (WGS84)" defaultOpen={false}>
             <div className="mb-2 flex items-center justify-between">
-              <p
-                className={`text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                  isDark ? "text-neutral-400" : "text-gray-500"
-                }`}
-              >
-                Coordinates
+              <p className="text-[11px] text-neutral-500">
+                {pointLonLat ? `Lon/Lat: ${pointLonLat}` : "Longitude, latitude pairs"}
               </p>
-
               <button
                 type="button"
                 onClick={() => {
@@ -753,15 +724,15 @@ export default function FeatureInspector({
             </div>
 
             <pre
-              className={`max-h-32 overflow-auto rounded-xl border p-3 font-mono text-[10px] leading-relaxed backdrop-blur-xl scrollbar-thin ${
+              className={`max-h-40 overflow-auto rounded-xl border p-3 font-mono text-[10px] leading-relaxed ${
                 isDark
-                  ? "border-white/8 bg-white/2.5 text-neutral-300 [scrollbar-color:rgba(52,211,153,0.3)_transparent]"
-                  : "border-white/80 bg-white/40 text-gray-700 [scrollbar-color:rgba(5,150,105,0.3)_transparent]"
-              } [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar]:h-1 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-emerald-500/30`}
+                  ? "border-white/8 bg-white/2.5 text-neutral-300"
+                  : "border-gray-200 bg-white/50 text-gray-700"
+              }`}
             >
               {coordinatesText}
             </pre>
-          </section>
+          </InspectorSection>
 
           {/* Footer */}
           <div
@@ -783,6 +754,39 @@ export default function FeatureInspector({
           </div>
         </div>
       </aside>
+  );
+
+  // Small screens get a fixed sheet; a draggable 680px window cannot fit.
+  if (compact) {
+    return <div className="pointer-events-auto h-full w-full">{panel}</div>;
+  }
+
+  return (
+    <Rnd
+      default={{
+        x: 0,
+        y: 0,
+        width: "100%",
+        height: 440,
+      }}
+      maxWidth={680}
+      minWidth={400}
+      minHeight={280}
+      bounds="parent"
+      dragHandleClassName="feature-inspector-drag-handle"
+      enableResizing={{
+        top: true,
+        right: true,
+        bottom: true,
+        left: true,
+        topRight: true,
+        bottomRight: true,
+        bottomLeft: true,
+        topLeft: true,
+      }}
+      className="pointer-events-auto z-20"
+    >
+      {panel}
     </Rnd>
   );
 }

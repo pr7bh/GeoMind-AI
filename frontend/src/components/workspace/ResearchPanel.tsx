@@ -194,7 +194,7 @@ export default function ResearchPanel({
 
   return (
     <aside
-      className={`flex h-full w-90 max-w-full shrink-0 flex-col border-l transition-colors duration-200 ${
+      className={`flex h-full w-90 max-w-full shrink-0 flex-col border-l transition-colors duration-200 max-[900px]:absolute max-[900px]:inset-y-0 max-[900px]:right-0 max-[900px]:z-50 max-[900px]:w-full ${
         isDark
           ? "border-neutral-800 bg-black text-neutral-100"
           : "border-gray-200 bg-white text-gray-900"

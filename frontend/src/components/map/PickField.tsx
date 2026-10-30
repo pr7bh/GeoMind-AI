@@ -58,7 +58,7 @@ export default function PickField({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-lg px-2 py-1 text-xs font-medium text-amber-500 hover:bg-amber-400/10"
+            className="rounded-lg px-2 py-1 text-xs font-medium text-amber-500 hover:bg-amber-400/10 max-[900px]:min-h-10"
           >
             Cancel
           </button>
@@ -70,7 +70,7 @@ export default function PickField({
                 onClick={onClear}
                 title={`Clear ${label.toLowerCase()}`}
                 aria-label={`Clear ${label.toLowerCase()}`}
-                className={`rounded-lg p-1.5 transition-colors ${
+                className={`rounded-lg p-1.5 transition-colors max-[900px]:p-2.5 ${
                   isDark
                     ? "text-neutral-500 hover:bg-white/8 hover:text-red-300"
                     : "text-gray-400 hover:bg-red-50 hover:text-red-600"
@@ -83,7 +83,7 @@ export default function PickField({
               type="button"
               onClick={onPick}
               aria-label={`Pick ${label.toLowerCase()} on map`}
-              className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+              className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors max-[900px]:min-h-10 ${
                 isDark
                   ? "border-emerald-400/25 text-emerald-400 hover:bg-emerald-400/10"
                   : "border-emerald-500/30 text-emerald-700 hover:bg-emerald-50"

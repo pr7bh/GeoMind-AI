@@ -1,5 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { getContext } from "ol/webgl";
+import { ErrorNote, ResultCard } from "./ToolUI";
 import type { ToolProps } from "./types";
+
+// OpenLayers renders heatmaps with WebGL and fails at render time without it.
+function supportsWebGL() {
+  return getContext(document.createElement("canvas")) !== null;
+}
 
 export default function HeatmapTool({
   theme,
@@ -13,6 +20,15 @@ export default function HeatmapTool({
   const [radius, setRadius] = useState(18);
   const [blur, setBlur] = useState(15);
   const [error, setError] = useState("");
+  const layer = importedLayers.find((item) => item.id === layerId);
+
+  // A heatmap whose source layer was removed from Data Layers is switched off.
+  useEffect(() => {
+    if (enabled && !layer) {
+      mapRef.current?.setHeatmap(null, radius, blur);
+      setEnabled(false);
+    }
+  }, [enabled, layer, mapRef, radius, blur]);
 
   function updateHeatmap(nextLayerId: string, nextRadius: number, nextBlur: number) {
     if (!enabled || !nextLayerId) return;
@@ -43,6 +59,11 @@ export default function HeatmapTool({
         return;
       }
 
+      if (!supportsWebGL()) {
+        setError("Heatmaps need WebGL, which this browser has disabled or does not support.");
+        return;
+      }
+
       mapRef.current?.setHeatmap(layerId, radius, blur);
       setEnabled(true);
     } catch (error) {
@@ -54,19 +75,10 @@ export default function HeatmapTool({
   }
 
   return (
-    <section
-      className={`rounded-xl border p-4 ${
-        isDark ? "border-white/10 bg-white/[0.03]" : "border-gray-200 bg-gray-50"
-      }`}
-    >
-      <div className="mb-3">
-        <h3 className="text-sm font-semibold">Heatmap & Density</h3>
-        <p className="mt-1 text-xs text-neutral-500">
-          Visualize concentrations of geographic points.
-        </p>
-      </div>
-
-      <label className="mb-1 block text-xs font-medium">Source layer</label>
+    <div>
+      <label className="mb-1 block text-xs font-medium text-neutral-500">
+        Point layer
+      </label>
 
       <select
         value={layerId}
@@ -131,7 +143,7 @@ export default function HeatmapTool({
       <button
         type="button"
         onClick={() => handleToggle(!enabled)}
-        className={`mt-4 w-full rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+        className={`mt-4 min-h-10 w-full rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
           enabled
             ? "border border-rose-500/30 bg-rose-500/10 text-rose-500"
             : "bg-emerald-600 text-white hover:bg-emerald-500"
@@ -140,7 +152,28 @@ export default function HeatmapTool({
         {enabled ? "Disable Heatmap" : "Enable Heatmap"}
       </button>
 
-      {error && <p className="mt-2 text-xs text-rose-500">{error}</p>}
-    </section>
+      {error && (
+        <div className="mt-3">
+          <ErrorNote message={error} />
+        </div>
+      )}
+
+      {enabled && layer && (
+        <div className="mt-3">
+          <ResultCard
+            isDark={isDark}
+            title="Heatmap active"
+            value={layer.name}
+            onZoom={() => mapRef.current?.zoomToImportedLayer(layer.id)}
+            onClear={() => handleToggle(false)}
+          >
+            <p className="text-xs text-neutral-500">
+              Density of point features in this layer ({layer.count} features
+              total). Radius {radius}px · blur {blur}px. Rendered in the browser.
+            </p>
+          </ResultCard>
+        </div>
+      )}
+    </div>
   );
 }

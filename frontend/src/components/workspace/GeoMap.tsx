@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import type {
   Feature as GeoJSONFeature,
   FeatureCollection as GeoJSONFeatureCollection,
+  Geometry,
 } from "geojson";
 import Map from "ol/Map";
 import View from "ol/View";
@@ -19,7 +20,6 @@ import type { DrawingMode } from "./DrawingToolbar";
 import Select from "ol/interaction/Select";
 import { click } from "ol/events/condition";
 import LineString from "ol/geom/LineString";
-import Polygon from "ol/geom/Polygon";
 import { getArea, getLength, getDistance } from "ol/sphere";
 import GeoJSON from "ol/format/GeoJSON";
 import { isEmpty } from "ol/extent";
@@ -107,7 +107,10 @@ export interface GeoMapHandle {
   clearPointHighlights: () => void;
   getImportedGeoJSON: (layerId: string) => string | null;
   highlightSpatialQueryResults: (features: GeoJSONFeature[]) => void;
-  addClipResultGeoJSON: (geojson: string, layerName?: string) => void;
+  /** Adds an analysis result layer and returns its layer id. */
+  addClipResultGeoJSON: (geojson: string, layerName?: string) => string;
+  /** Fits the view to GeoJSON features or geometries (WGS84). */
+  fitToGeoJSON: (items: (GeoJSONFeature | Geometry)[]) => void;
   startMapPick: (request: MapPickRequest) => void;
   cancelMapPick: () => void;
   setPickMarker: (
@@ -825,6 +828,39 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
           maxZoom: 16,
         });
       }
+
+      return id;
+    },
+    fitToGeoJSON(items) {
+      const map = mapInstance.current;
+
+      if (!map || items.length === 0) return;
+
+      const format = new GeoJSON();
+      const features = items.flatMap((item) =>
+        item.type === "Feature"
+          ? format.readFeatures(item, {
+              dataProjection: "EPSG:4326",
+              featureProjection: "EPSG:3857",
+            })
+          : [
+              new Feature(
+                format.readGeometry(item, {
+                  dataProjection: "EPSG:4326",
+                  featureProjection: "EPSG:3857",
+                }) ?? undefined,
+              ),
+            ],
+      );
+      const extent = new VectorSource({ features }).getExtent();
+
+      if (!extent || isEmpty(extent)) return;
+
+      map.getView().fit(extent, {
+        padding: [80, 80, 80, 80],
+        duration: 500,
+        maxZoom: 17,
+      });
     },
     startMapPick(request) {
       const map = mapInstance.current;
@@ -1622,15 +1658,13 @@ clearDiscoveryLayers() {
       let areaSquareMeters: number | undefined;
       let perimeterMeters: number | undefined;
 
-      if (geometryType === "LineString") {
-        lengthMeters = getLength(geometry as LineString);
+      if (geometryType === "LineString" || geometryType === "MultiLineString") {
+        lengthMeters = getLength(geometry);
       }
 
-      if (geometryType === "Polygon") {
-        const polygon = geometry as Polygon;
-
-        areaSquareMeters = getArea(polygon);
-        perimeterMeters = getLength(polygon);
+      if (geometryType === "Polygon" || geometryType === "MultiPolygon") {
+        areaSquareMeters = getArea(geometry);
+        perimeterMeters = getLength(geometry);
       }
 
       const simpleGeometry = geometry as SimpleGeometry;

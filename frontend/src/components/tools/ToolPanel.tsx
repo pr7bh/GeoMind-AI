@@ -23,7 +23,7 @@ export default function ToolPanel({
     <section
       hidden={hidden}
       aria-label={tool.title}
-      className={`pointer-events-auto flex max-h-full w-80 max-w-[calc(100vw-5.5rem)] flex-col overflow-hidden rounded-2xl border shadow-2xl backdrop-blur-2xl ${
+      className={`pointer-events-auto flex max-h-full w-80 max-w-[calc(100vw-5.5rem)] flex-col overflow-hidden rounded-2xl border shadow-2xl backdrop-blur-2xl max-[900px]:max-h-[46vh] max-[900px]:w-full max-[900px]:max-w-none ${
         isDark
           ? "border-white/10 bg-neutral-950/80 text-white shadow-black/40"
           : "border-gray-200/80 bg-white/85 text-gray-900 shadow-gray-900/10"
@@ -56,7 +56,7 @@ export default function ToolPanel({
           onClick={onClose}
           title="Close panel"
           aria-label={`Close ${tool.title}`}
-          className={`rounded-lg p-1.5 transition-colors ${
+          className={`rounded-lg p-1.5 transition-colors max-[900px]:p-2.5 ${
             isDark
               ? "text-neutral-500 hover:bg-white/8 hover:text-white"
               : "text-gray-400 hover:bg-gray-100 hover:text-gray-900"

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import type { FeatureCollection, Geometry } from "geojson";
-import { getJSON, postJSON } from "../../lib/api";
+import { getJSON, isAbortError, postJSON } from "../../lib/api";
+import { useRequest } from "../../lib/useRequest";
+import { EmptyNote, ErrorNote, FeatureList, ResultCard, RunButton } from "./ToolUI";
 import PickField from "../map/PickField";
 import type { MapPickProps, ToolProps } from "./types";
 
@@ -69,11 +71,13 @@ export default function DiscoveryTool({
   const [categoryId, setCategoryId] = useState("hospital");
   const [radiusKm, setRadiusKm] = useState(2);
   const [center, setCenter] = useState<[number, number] | null>(null);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [summary, setSummary] = useState<DiscoveryResponse["metadata"] | null>(
-    null,
-  );
+  const [result, setResult] = useState<{
+    data: DiscoveryResponse;
+    layerId: string | null;
+  } | null>(null);
+  const request = useRequest();
+  const summary = result?.data.metadata ?? null;
 
   const category = categories.find((item) => item.id === categoryId);
   const maxRadius = category?.max_radius_km ?? 50;
@@ -82,25 +86,30 @@ export default function DiscoveryTool({
   ).length;
 
   useEffect(() => {
+    const controller = new AbortController();
+
     getJSON<{ categories: DiscoveryCategory[] }>(
       "/api/discovery/categories",
       "Unable to load discovery categories.",
+      { signal: controller.signal },
     )
       .then((data) => setCategories(data.categories))
-      .catch((error: unknown) =>
+      .catch((error: unknown) => {
+        if (isAbortError(error)) return;
         setError(
           error instanceof Error
             ? error.message
             : "Unable to load discovery categories.",
-        ),
-      );
+        );
+      });
+
+    return () => controller.abort();
   }, []);
 
   const groups = [...new Set(categories.map((item) => item.group))];
 
   function handleCategoryChange(nextId: string) {
     setCategoryId(nextId);
-    setSummary(null);
 
     const next = categories.find((item) => item.id === nextId);
 
@@ -147,44 +156,54 @@ export default function DiscoveryTool({
       return;
     }
 
+    setError("");
+
     try {
-      setLoading(true);
-      setError("");
-      setSummary(null);
-
-      const data = await postJSON<DiscoveryResponse>(
-        "/api/discovery/features",
-        {
-          coordinates: center,
-          category: categoryId,
-          radius_km: radiusKm,
-        },
-        "Feature discovery failed.",
+      const data = await request.run((signal) =>
+        postJSON<DiscoveryResponse>(
+          "/api/discovery/features",
+          {
+            coordinates: center,
+            category: categoryId,
+            radius_km: radiusKm,
+          },
+          "Feature discovery failed.",
+          { signal },
+        ),
       );
 
-      setSummary(data.metadata);
+      if (!data) return;
 
-      if (data.features.length === 0) return;
+      const layer =
+        data.features.length > 0
+          ? mapRef.current?.addDiscoveryLayer(
+              data,
+              `${data.metadata.label} · ${radiusKm} km`,
+            )
+          : undefined;
 
-      mapRef.current?.addDiscoveryLayer(
-        data,
-        `${data.metadata.label} · ${radiusKm} km`,
-      );
+      setResult({ data, layerId: layer?.id ?? null });
       onLayersChanged();
     } catch (error) {
-      setSummary(null);
       setError(
         error instanceof Error ? error.message : "Feature discovery failed.",
       );
-    } finally {
-      setLoading(false);
     }
+  }
+
+  function handleClearResult() {
+    if (result?.layerId) {
+      mapRef.current?.removeImportedLayer(result.layerId);
+      onLayersChanged();
+    }
+    setResult(null);
+    setError("");
   }
 
   function handleClearLayers() {
     mapRef.current?.clearDiscoveryLayers();
     onLayersChanged();
-    setSummary(null);
+    setResult(null);
   }
 
   const inputClass = `mt-1.5 w-full rounded-xl border p-2.5 text-sm outline-none backdrop-blur-md transition-all focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/10 ${
@@ -251,58 +270,82 @@ export default function DiscoveryTool({
         </button>
       </div>
 
-      <button
-        type="button"
-        onClick={handleDiscover}
-        disabled={loading || !center || pickActive || categories.length === 0}
-        className="mt-3 w-full rounded-xl border border-emerald-400/30 bg-emerald-500 px-3 py-2.5 text-sm font-semibold text-black transition-all hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {loading ? "Querying OpenStreetMap..." : "Discover Features"}
-      </button>
+      <div className="mt-3 space-y-3">
+        <RunButton
+          isDark={isDark}
+          label="Discover Features"
+          loadingLabel="Querying OpenStreetMap…"
+          loading={request.loading}
+          disabled={!center || pickActive || categories.length === 0}
+          onRun={handleDiscover}
+          onCancel={request.cancel}
+        />
 
-      {error && (
-        <p className="mt-3 break-words rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-400">
-          {error}
-        </p>
-      )}
+        {error && <ErrorNote message={error} />}
 
-      {summary && (
-        <div
-          className={`mt-3 rounded-xl border p-3 ${
-            isDark
-              ? "border-emerald-400/20 bg-emerald-400/5"
-              : "border-emerald-500/20 bg-emerald-500/5"
-          }`}
-        >
-          <p className="text-xs text-neutral-500">{summary.label}</p>
-          <p className="mt-1 text-2xl font-semibold text-emerald-500">
-            {summary.returned}
-            {summary.total_found > summary.returned && (
-              <span className="ml-1 text-sm font-medium text-neutral-500">
-                of {summary.total_found}
-              </span>
+        {summary && result && (
+          <ResultCard
+            isDark={isDark}
+            title={summary.label}
+            value={
+              <>
+                {summary.returned}
+                {summary.total_found > summary.returned && (
+                  <span className="ml-1 text-sm font-medium text-neutral-500">
+                    of {summary.total_found}
+                  </span>
+                )}
+              </>
+            }
+            stale={Boolean(error)}
+            onZoom={
+              result.layerId
+                ? () => mapRef.current?.zoomToImportedLayer(result.layerId!)
+                : undefined
+            }
+            onClear={handleClearResult}
+          >
+            {summary.returned === 0 ? (
+              <EmptyNote>
+                No {summary.label.toLowerCase()} are mapped in OpenStreetMap
+                within {summary.radius_km} km of this point.
+              </EmptyNote>
+            ) : (
+              <>
+                <p className="text-xs text-neutral-500">
+                  Within {summary.radius_km} km ·{" "}
+                  {summary.geometry_types.join(", ")}
+                </p>
+                <FeatureList
+                  isDark={isDark}
+                  items={result.data.features}
+                  getKey={(feature) => String(feature.id ?? feature.properties.osm_id)}
+                  getName={(feature) => feature.properties.display_name}
+                  getDetail={(feature) =>
+                    feature.properties.distance_km === null
+                      ? ""
+                      : `${feature.properties.distance_km.toFixed(2)} km`
+                  }
+                  onSelect={(feature) => mapRef.current?.fitToGeoJSON([feature])}
+                />
+              </>
             )}
-          </p>
-          <p className="mt-1 text-xs text-neutral-500">
-            {summary.returned === 0
-              ? `No features found within ${summary.radius_km} km.`
-              : `Within ${summary.radius_km} km · ${summary.geometry_types.join(", ")}`}
-          </p>
-          {summary.truncated && (
-            <p className="mt-2 text-xs text-amber-500">
-              Results were truncated. Reduce the radius for complete results.
+            {summary.truncated && (
+              <p className="text-xs text-amber-500">
+                Results were truncated. Reduce the radius for complete results.
+              </p>
+            )}
+            <p className="text-[11px] leading-relaxed text-neutral-500">
+              {summary.coverage_note}
             </p>
-          )}
-          <p className="mt-2 text-[11px] leading-relaxed text-neutral-500">
-            {summary.coverage_note}
-          </p>
-          <p className="mt-1 text-[11px] text-neutral-500">
-            {summary.attribution}
-            {summary.osm_base &&
-              ` · data as of ${new Date(summary.osm_base).toLocaleDateString()}`}
-          </p>
-        </div>
-      )}
+            <p className="text-[11px] text-neutral-500">
+              Source: {summary.attribution}
+              {summary.osm_base &&
+                ` · data as of ${new Date(summary.osm_base).toLocaleDateString()}`}
+            </p>
+          </ResultCard>
+        )}
+      </div>
 
       {discoveryLayerCount > 0 && (
         <button

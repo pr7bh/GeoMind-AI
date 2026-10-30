@@ -5,8 +5,10 @@ import type {
   Geometry as GeoJSONGeometry,
 } from "geojson";
 import { postJSON } from "../../lib/api";
+import { useRequest } from "../../lib/useRequest";
 import LayerSelect from "./LayerSelect";
 import { readLayerFeatures } from "./readLayerFeatures";
+import { EmptyNote, ErrorNote, FeatureList, ResultCard, RunButton } from "./ToolUI";
 import type { MapPickProps, ToolProps } from "./types";
 
 type SpatialOperation = "intersects" | "within" | "contains";
@@ -21,9 +23,26 @@ interface SpatialQueryResult {
   }[];
 }
 
+interface ClipResult {
+  input_count: number;
+  result_count: number;
+  skipped_count: number;
+  result: GeoJSONFeatureCollection;
+}
+
+type ToolResult =
+  | { kind: "query"; data: SpatialQueryResult; layerName: string }
+  | { kind: "clip"; data: ClipResult; layerId: string | null; layerName: string };
+
 interface SpatialQueryToolProps extends ToolProps, MapPickProps {
   onLayersChanged: () => void;
 }
+
+const OPERATION_HELP: Record<SpatialOperation, string> = {
+  intersects: "Features touching or overlapping the boundary.",
+  within: "Features entirely inside the boundary.",
+  contains: "Features that fully contain the boundary.",
+};
 
 export default function SpatialQueryTool({
   theme,
@@ -37,25 +56,23 @@ export default function SpatialQueryTool({
 
   const [layerId, setLayerId] = useState("");
   const [operation, setOperation] = useState<SpatialOperation>("within");
-  const [result, setResult] = useState<SpatialQueryResult | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<ToolResult | null>(null);
   const [error, setError] = useState("");
   const [targetGeometry, setTargetGeometry] =
     useState<GeoJSONGeometry | null>(null);
+  const request = useRequest();
 
-  function validateInput(boundaryName: string) {
-    if (!layerId || !mapRef.current) {
-      setError("Please select a source layer.");
+  const layerName =
+    importedLayers.find((layer) => layer.id === layerId)?.name ?? "layer";
+
+  function validateInput() {
+    if (!layerId) {
+      setError("Select a source layer.");
       return false;
     }
 
     if (!targetGeometry) {
-      setError("Draw a polygon and click Use Drawn Polygon first.");
-      return false;
-    }
-
-    if (targetGeometry.type !== "Polygon" && targetGeometry.type !== "MultiPolygon") {
-      setError(`The ${boundaryName} boundary must be a polygon.`);
+      setError("Select a boundary polygon on the map or use a drawn polygon.");
       return false;
     }
 
@@ -63,64 +80,60 @@ export default function SpatialQueryTool({
   }
 
   async function handleRunQuery() {
-    if (!validateInput("query")) return;
+    if (!validateInput()) return;
+
+    setError("");
 
     try {
-      setLoading(true);
-      setError("");
-      setResult(null);
-
-      const data = await postJSON<SpatialQueryResult>(
-        "/api/analysis/spatial-query",
-        {
-          features: readLayerFeatures(mapRef, layerId),
-          target_geometry: targetGeometry,
-          operation,
-        },
-        "Spatial query failed.",
+      const features = readLayerFeatures(mapRef, layerId);
+      const data = await request.run((signal) =>
+        postJSON<SpatialQueryResult>(
+          "/api/analysis/spatial-query",
+          { features, target_geometry: targetGeometry, operation },
+          "Spatial query failed.",
+          { signal },
+        ),
       );
 
-      setResult(data);
+      if (!data) return;
+
+      setResult({ kind: "query", data, layerName });
       mapRef.current?.highlightSpatialQueryResults(
         data.results.map((item) => item.feature),
       );
     } catch (error) {
       setError(error instanceof Error ? error.message : "Spatial query failed.");
-    } finally {
-      setLoading(false);
     }
   }
 
   async function handleRunClip() {
-    if (!validateInput("clip")) return;
+    if (!validateInput()) return;
+
+    setError("");
 
     try {
-      setLoading(true);
-      setError("");
-
-      const data = await postJSON<{
-        result_count: number;
-        result: GeoJSONFeatureCollection;
-      }>(
-        "/api/analysis/clip",
-        {
-          features: readLayerFeatures(mapRef, layerId),
-          clip_geometry: targetGeometry,
-        },
-        "Clip operation failed.",
+      const features = readLayerFeatures(mapRef, layerId);
+      const data = await request.run((signal) =>
+        postJSON<ClipResult>(
+          "/api/analysis/clip",
+          { features, clip_geometry: targetGeometry },
+          "Clip operation failed.",
+          { signal },
+        ),
       );
 
-      if (data.result_count === 0) {
-        setError("No features intersect the clipping boundary.");
-        return;
-      }
+      if (!data) return;
 
-      mapRef.current?.addClipResultGeoJSON(JSON.stringify(data.result));
+      const clipLayerId =
+        data.result_count > 0
+          ? (mapRef.current?.addClipResultGeoJSON(JSON.stringify(data.result)) ?? null)
+          : null;
+
+      mapRef.current?.highlightSpatialQueryResults([]);
+      setResult({ kind: "clip", data, layerId: clipLayerId, layerName });
       onLayersChanged();
     } catch (error) {
       setError(error instanceof Error ? error.message : "Clip operation failed.");
-    } finally {
-      setLoading(false);
     }
   }
 
@@ -134,25 +147,19 @@ export default function SpatialQueryTool({
 
     try {
       const collection = JSON.parse(drawings) as GeoJSONFeatureCollection;
-
       const polygonFeature = collection.features.find(
         (feature) => feature.geometry?.type === "Polygon",
       );
 
       if (!polygonFeature?.geometry) {
         setError("Draw a polygon on the map first using the Polygon tool.");
-        setTargetGeometry(null);
         return;
       }
 
       setTargetGeometry(polygonFeature.geometry);
       setError("");
-      setResult(null);
-
-      mapRef.current?.highlightSpatialQueryResults([]);
     } catch {
       setError("Unable to read the drawn polygon.");
-      setTargetGeometry(null);
     }
   }
 
@@ -163,30 +170,41 @@ export default function SpatialQueryTool({
       "polygon",
       "Click a polygon on the map to use as the boundary",
       ["Polygon", "MultiPolygon"],
-      (feature) => {
-        setTargetGeometry(feature.geometry);
-        setResult(null);
-        mapRef.current?.highlightSpatialQueryResults([]);
-      },
+      (feature) => setTargetGeometry(feature.geometry),
     );
   }
 
-  function handleClear() {
+  function handleClearResult() {
     mapRef.current?.highlightSpatialQueryResults([]);
+
+    if (result?.kind === "clip" && result.layerId) {
+      mapRef.current?.removeImportedLayer(result.layerId);
+      onLayersChanged();
+    }
+
     setResult(null);
     setError("");
   }
 
+  function handleReset() {
+    request.cancel();
+    picker.cancel("spatial-query");
+    handleClearResult();
+    setTargetGeometry(null);
+  }
+
+  const secondaryButton = `min-h-10 rounded-xl border px-3 py-2.5 text-xs font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50 ${
+    isDark
+      ? "border-white/10 bg-white/5 hover:border-emerald-400/30"
+      : "border-gray-200 bg-white/60 hover:border-emerald-500/30"
+  }`;
+
   return (
     <div className="space-y-4">
-      <p className="text-xs leading-relaxed text-neutral-500">
-        Query imported features using a drawn polygon.
-      </p>
-
       <LayerSelect
         isDark={isDark}
         label="Source layer"
-        placeholder="Select imported layer"
+        placeholder="Select a layer"
         value={layerId}
         layers={importedLayers}
         onChange={setLayerId}
@@ -194,24 +212,22 @@ export default function SpatialQueryTool({
 
       <div>
         <label className="block text-xs font-medium text-neutral-500">
-          Spatial operation
+          Spatial relationship
         </label>
-
         <select
           value={operation}
-          onChange={(event) =>
-            setOperation(event.target.value as SpatialOperation)
-          }
-          className={`mt-1.5 w-full rounded-xl border p-2.5 text-sm outline-none backdrop-blur-md transition-all focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/10 ${
+          onChange={(event) => setOperation(event.target.value as SpatialOperation)}
+          className={`mt-1.5 w-full rounded-xl border p-2.5 text-sm outline-none transition-all focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/10 ${
             isDark
               ? "border-white/10 bg-neutral-900/60 text-white hover:border-white/20"
-              : "border-white/80 bg-white/50 text-black hover:border-emerald-500/30"
+              : "border-gray-200 bg-white/60 text-black hover:border-emerald-500/30"
           }`}
         >
           <option value="intersects">Intersects</option>
           <option value="within">Within</option>
           <option value="contains">Contains</option>
         </select>
+        <p className="mt-1 text-[11px] text-neutral-500">{OPERATION_HELP[operation]}</p>
       </div>
 
       <div>
@@ -220,150 +236,152 @@ export default function SpatialQueryTool({
           <button
             type="button"
             onClick={
-              pickingPolygon
-                ? () => picker.cancel("spatial-query")
-                : handleSelectPolygon
+              pickingPolygon ? () => picker.cancel("spatial-query") : handleSelectPolygon
             }
-            className={`rounded-xl border px-3 py-2.5 text-xs font-medium transition-all ${
+            className={
               pickingPolygon
-                ? "border-amber-400/50 bg-amber-400/10 text-amber-500"
-                : isDark
-                  ? "border-emerald-400/25 bg-emerald-400/4 hover:bg-emerald-400/10"
-                  : "border-emerald-500/25 bg-emerald-500/4 hover:bg-emerald-500/10"
-            }`}
+                ? "min-h-10 rounded-xl border border-amber-400/50 bg-amber-400/10 px-3 py-2.5 text-xs font-medium text-amber-500"
+                : secondaryButton
+            }
           >
             {pickingPolygon ? "Cancel selection" : "Select on Map"}
           </button>
-          <button
-            type="button"
-            onClick={handleUseDrawnPolygon}
-            className={`rounded-xl border px-3 py-2.5 text-xs font-medium transition-all ${
-              isDark
-                ? "border-white/10 bg-white/5 hover:border-emerald-400/30"
-                : "border-gray-200 bg-white/60 hover:border-emerald-500/30"
-            }`}
-          >
+          <button type="button" onClick={handleUseDrawnPolygon} className={secondaryButton}>
             Use Drawn Polygon
           </button>
         </div>
-      </div>
 
-      <div
-        className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${
-          isDark ? "border-white/5 bg-white/2.5" : "border-gray-200/60 bg-white/30"
-        }`}
-      >
-        <span
-          className={`h-2 w-2 shrink-0 rounded-full ${
-            targetGeometry
-              ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.65)]"
-              : "bg-neutral-500"
-          }`}
-        />
-        <span className="text-xs text-neutral-500">
-          {targetGeometry
-            ? "Query boundary selected"
-            : "Draw a polygon to set the boundary"}
-        </span>
-      </div>
-
-      <button
-        type="button"
-        onClick={handleRunQuery}
-        disabled={loading || !layerId}
-        className="w-full rounded-xl border border-emerald-400/30 bg-emerald-500 px-3 py-2.5 text-sm font-semibold text-black shadow-lg shadow-emerald-950/10 transition-all duration-200 hover:bg-emerald-400 hover:shadow-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {loading ? "Running query..." : "Run Spatial Query"}
-      </button>
-
-      <button
-        type="button"
-        onClick={handleRunClip}
-        disabled={loading || !layerId}
-        className={`w-full rounded-xl border px-3 py-2.5 text-sm font-medium backdrop-blur-md transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50 ${
-          isDark
-            ? "border-white/10 bg-white/2.5 hover:border-emerald-400/30 hover:bg-emerald-400/6"
-            : "border-gray-200/80 bg-white/40 hover:border-emerald-500/30 hover:bg-emerald-500/5"
-        }`}
-      >
-        {loading ? "Processing..." : "Clip Features"}
-      </button>
-
-      {error && (
-        <p className="wrap-break-word rounded-xl border border-red-500/20 bg-red-500/6 p-3 text-xs leading-relaxed text-red-400 backdrop-blur-md">
-          {error}
-        </p>
-      )}
-
-      {result && (
         <div
-          className={`rounded-xl border p-3 backdrop-blur-md ${
-            isDark
-              ? "border-emerald-400/20 bg-emerald-400/4.5"
-              : "border-emerald-500/20 bg-emerald-500/4"
+          className={`mt-2 flex items-center gap-2 rounded-lg border px-3 py-2 ${
+            isDark ? "border-white/5 bg-white/2.5" : "border-gray-200/60 bg-white/30"
           }`}
         >
-          <p className="text-xs font-medium text-neutral-500">
-            Matching features
-          </p>
-
-          <p className="mt-1 text-2xl font-semibold text-emerald-500">
-            {result.matched_count}
-          </p>
-
-          <p className="mt-1 text-xs leading-relaxed text-neutral-500">
-            Matched {result.matched_count} of {result.total_features} features
-          </p>
-
-          {result.results.length > 0 && (
-            <div className="mt-3 space-y-2">
-              {result.results.map((item) => {
-                const properties = item.feature.properties ?? {};
-                const featureName =
-                  properties.name ??
-                  properties.Name ??
-                  `Feature ${item.index + 1}`;
-
-                return (
-                  <div
-                    key={item.index}
-                    className={`rounded-lg border p-2 backdrop-blur-sm ${
-                      isDark
-                        ? "border-white/10 bg-white/2.5"
-                        : "border-gray-200/70 bg-white/40"
-                    }`}
-                  >
-                    <p className="truncate text-sm font-medium">
-                      {String(featureName)}
-                    </p>
-
-                    <p className="mt-1 text-xs text-neutral-500">
-                      {item.feature.geometry?.type ?? "Unknown geometry"}
-                    </p>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {result.matched_count === 0 && (
-            <p className="mt-2 text-xs text-neutral-500">
-              No features matched this query.
-            </p>
+          <span
+            className={`h-2 w-2 shrink-0 rounded-full ${
+              targetGeometry
+                ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.65)]"
+                : "bg-neutral-500"
+            }`}
+          />
+          <span className="flex-1 text-xs text-neutral-500">
+            {targetGeometry
+              ? `Boundary selected (${targetGeometry.type})`
+              : "No boundary selected"}
+          </span>
+          {targetGeometry && (
+            <button
+              type="button"
+              onClick={() => mapRef.current?.fitToGeoJSON([targetGeometry])}
+              className="text-[11px] font-medium text-emerald-500 hover:underline"
+            >
+              Zoom
+            </button>
           )}
         </div>
+      </div>
+
+      <div className="space-y-2">
+        <RunButton
+          isDark={isDark}
+          label="Run Spatial Query"
+          loadingLabel="Running spatial analysis…"
+          loading={request.loading}
+          disabled={!layerId || !targetGeometry || pickingPolygon}
+          onRun={handleRunQuery}
+          onCancel={request.cancel}
+        />
+        {!request.loading && (
+          <button
+            type="button"
+            onClick={handleRunClip}
+            disabled={!layerId || !targetGeometry || pickingPolygon}
+            className={`w-full ${secondaryButton} text-sm`}
+          >
+            Clip Features to Boundary
+          </button>
+        )}
+      </div>
+
+      {error && <ErrorNote message={error} />}
+
+      {result?.kind === "query" && (
+        <ResultCard
+          isDark={isDark}
+          title="Matching features"
+          value={result.data.matched_count}
+          stale={Boolean(error)}
+          onZoom={
+            result.data.results.length > 0
+              ? () =>
+                  mapRef.current?.fitToGeoJSON(
+                    result.data.results.map((item) => item.feature),
+                  )
+              : undefined
+          }
+          onClear={handleClearResult}
+        >
+          <p className="text-xs text-neutral-500">
+            {result.data.operation} · {result.data.matched_count} of{" "}
+            {result.data.total_features} features in {result.layerName}
+          </p>
+          {result.data.results.length > 0 ? (
+            <FeatureList
+              isDark={isDark}
+              items={result.data.results}
+              getKey={(item) => String(item.index)}
+              getName={(item) =>
+                String(
+                  item.feature.properties?.display_name ??
+                    item.feature.properties?.name ??
+                    item.feature.properties?.Name ??
+                    `Feature ${item.index + 1}`,
+                )
+              }
+              getDetail={(item) => item.feature.geometry?.type ?? ""}
+              onSelect={(item) => mapRef.current?.fitToGeoJSON([item.feature])}
+            />
+          ) : (
+            <EmptyNote>No features match this relationship.</EmptyNote>
+          )}
+        </ResultCard>
+      )}
+
+      {result?.kind === "clip" && (
+        <ResultCard
+          isDark={isDark}
+          title="Clipped features"
+          value={result.data.result_count}
+          stale={Boolean(error)}
+          onZoom={
+            result.layerId
+              ? () => mapRef.current?.zoomToImportedLayer(result.layerId!)
+              : undefined
+          }
+          onClear={handleClearResult}
+        >
+          {result.data.result_count > 0 ? (
+            <p className="text-xs text-neutral-500">
+              {result.data.result_count} of {result.data.input_count} features
+              from {result.layerName} clipped into a new layer.
+              {result.data.skipped_count > 0 &&
+                ` ${result.data.skipped_count} invalid features skipped.`}
+            </p>
+          ) : (
+            <EmptyNote>No features intersect the clipping boundary.</EmptyNote>
+          )}
+        </ResultCard>
       )}
 
       <button
         type="button"
-        onClick={handleClear}
-        className={`w-full rounded-xl border px-3 py-2 text-sm backdrop-blur-md transition-all duration-200 ${
+        onClick={handleReset}
+        className={`w-full rounded-xl border px-3 py-2 text-sm transition-all ${
           isDark
-            ? "border-white/10 bg-white/2.5 hover:border-emerald-400/25 hover:bg-white/5"
-            : "border-gray-200/80 bg-white/40 hover:border-emerald-500/25 hover:bg-white/70"
+            ? "border-white/10 bg-white/5 hover:border-red-400/25 hover:text-red-300"
+            : "border-gray-200 bg-white/60 hover:border-red-500/25 hover:text-red-600"
         }`}
       >
-        Clear Results
+        Reset
       </button>
     </div>
   );

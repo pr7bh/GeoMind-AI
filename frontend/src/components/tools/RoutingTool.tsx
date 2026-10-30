@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { postJSON } from "../../lib/api";
+import { formatDistanceMetres } from "../../lib/format";
+import { useRequest } from "../../lib/useRequest";
 import PickField from "../map/PickField";
+import { ErrorNote, ResultCard, RunButton } from "./ToolUI";
 import type { MapPickProps, ToolProps } from "./types";
 
 export interface RouteResult {
@@ -40,7 +43,7 @@ export default function RoutingTool({
   const [distance, setDistance] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [roadRoute, setRoadRoute] = useState<RouteResult | null>(null);
-  const [roadRouteLoading, setRoadRouteLoading] = useState(false);
+  const request = useRequest();
 
   function handlePickPoint(target: "start" | "destination") {
     if (!mapRef.current) {
@@ -56,6 +59,7 @@ export default function RoutingTool({
       `Click the map to set the route ${target}`,
       (coordinates) => {
         // Results only go stale once a new point is actually chosen.
+        request.cancel();
         setDistance(null);
         setRoadRoute(null);
         mapRef.current?.clearRouteDistance();
@@ -94,16 +98,19 @@ export default function RoutingTool({
       return;
     }
 
-    try {
-      setRoadRouteLoading(true);
-      setError("");
-      setRoadRoute(null);
+    setError("");
 
-      const data = await postJSON<RouteResult>(
-        "/api/routing/route",
-        { start, destination },
-        "Road routing failed.",
+    try {
+      const data = await request.run((signal) =>
+        postJSON<RouteResult>(
+          "/api/routing/route",
+          { start, destination },
+          "Road routing failed.",
+          { signal },
+        ),
       );
+
+      if (!data) return;
 
       mapRef.current?.showRoadRoute(data.geometry);
       setRoadRoute(data);
@@ -113,25 +120,31 @@ export default function RoutingTool({
           ? error.message
           : "Unable to calculate the road route.",
       );
-    } finally {
-      setRoadRouteLoading(false);
     }
   }
 
-  function handleClear() {
+  function handleClearResults() {
     mapRef.current?.clearRouteDistance();
+    setDistance(null);
+    setRoadRoute(null);
+    setError("");
+  }
+
+  function handleClear() {
+    request.cancel();
     picker.cancel("routing");
     picker.setMarker("routing", "start", null);
     picker.setMarker("routing", "destination", null);
     onStartChange(null);
     onDestinationChange(null);
-    setDistance(null);
-    setError("");
-    setRoadRoute(null);
+    handleClearResults();
   }
 
+  const ready = Boolean(start && destination) && pickTarget === null;
+  const hasResult = distance !== null || roadRoute !== null;
+
   return (
-    <div>
+    <div className="space-y-4">
       <div className="space-y-3">
         <PickField
           isDark={isDark}
@@ -161,67 +174,92 @@ export default function RoutingTool({
         />
       </div>
 
-      <button
-        type="button"
-        onClick={handleCalculateDistance}
-        disabled={!start || !destination || pickTarget !== null}
-        className="mt-4 w-full rounded-xl border border-emerald-400/30 bg-emerald-500 px-3 py-2.5 text-sm font-semibold text-black transition-all hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        Calculate Distance
-      </button>
-
-      {distance !== null && (
-        <div
-          className={`mt-3 rounded-xl border p-3 ${
+      <div className="space-y-2">
+        <RunButton
+          isDark={isDark}
+          color="violet"
+          label="Calculate Road Route"
+          loadingLabel="Requesting driving route…"
+          loading={request.loading}
+          disabled={!ready}
+          onRun={handleCalculateRoadRoute}
+          onCancel={request.cancel}
+        />
+        <button
+          type="button"
+          onClick={handleCalculateDistance}
+          disabled={!ready}
+          className={`min-h-10 w-full rounded-xl border px-3 py-2 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50 ${
             isDark
-              ? "border-violet-400/20 bg-violet-400/5"
-              : "border-violet-500/20 bg-violet-500/5"
+              ? "border-white/10 bg-white/5 hover:border-emerald-400/30"
+              : "border-gray-200 bg-white/60 hover:border-emerald-500/30"
           }`}
         >
-          <p className="text-xs text-neutral-500">Straight-line distance</p>
-          <p className="mt-1 text-xl font-semibold text-violet-400">
-            {distance >= 1000
-              ? `${(distance / 1000).toFixed(3)} km`
-              : `${distance.toFixed(2)} m`}
+          Calculate Straight-line Distance
+        </button>
+      </div>
+
+      {error && <ErrorNote message={error} />}
+
+      {hasResult && (
+        <ResultCard
+          isDark={isDark}
+          title="Route"
+          value={
+            roadRoute
+              ? `${roadRoute.distance_km.toFixed(2)} km`
+              : distance !== null
+                ? formatDistanceMetres(distance)
+                : undefined
+          }
+          stale={Boolean(error)}
+          onZoom={() =>
+            mapRef.current?.fitToGeoJSON(
+              roadRoute
+                ? [roadRoute.geometry]
+                : start && destination
+                  ? [{ type: "LineString", coordinates: [start, destination] }]
+                  : [],
+            )
+          }
+          onClear={handleClearResults}
+        >
+          <dl className="grid grid-cols-2 gap-2 text-xs">
+            {roadRoute && (
+              <>
+                <div>
+                  <dt className="text-neutral-500">Driving distance</dt>
+                  <dd className="font-medium">
+                    {roadRoute.distance_km.toFixed(2)} km
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-neutral-500">Estimated time</dt>
+                  <dd className="font-medium">
+                    {roadRoute.estimated_duration_minutes} min
+                  </dd>
+                </div>
+              </>
+            )}
+            {distance !== null && (
+              <div>
+                <dt className="text-neutral-500">Straight-line</dt>
+                <dd className="font-medium">{formatDistanceMetres(distance)}</dd>
+              </div>
+            )}
+          </dl>
+          <p className="text-[11px] text-neutral-500">
+            {roadRoute
+              ? "Driving route: OSRM on OpenStreetMap data."
+              : "Straight-line distance is great-circle (spherical Earth)."}
           </p>
-        </div>
-      )}
-
-      {error && (
-        <p className="mt-3 break-words rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-400">
-          {error}
-        </p>
-      )}
-
-      <button
-        type="button"
-        onClick={handleCalculateRoadRoute}
-        disabled={
-          roadRouteLoading || !start || !destination || pickTarget !== null
-        }
-        className="mt-2 w-full rounded-xl bg-violet-500 px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {roadRouteLoading ? "Calculating road route..." : "Calculate Road Route"}
-      </button>
-
-      {roadRoute && (
-        <div className="mt-3 rounded-xl border border-violet-500/20 bg-violet-500/5 p-3">
-          <p className="text-xs text-neutral-500">Road distance</p>
-          <p className="text-lg font-semibold">
-            {roadRoute.distance_km.toFixed(2)} km
-          </p>
-
-          <p className="mt-2 text-xs text-neutral-500">Estimated driving time</p>
-          <p className="text-sm font-medium">
-            {roadRoute.estimated_duration_minutes} min
-          </p>
-        </div>
+        </ResultCard>
       )}
 
       <button
         type="button"
         onClick={handleClear}
-        className={`mt-3 w-full rounded-xl border px-3 py-2 text-sm transition-all ${
+        className={`w-full rounded-xl border px-3 py-2 text-sm transition-all ${
           isDark
             ? "border-white/10 bg-white/5 hover:border-red-400/25 hover:text-red-300"
             : "border-gray-200 bg-white/60 hover:border-red-500/25 hover:text-red-600"
