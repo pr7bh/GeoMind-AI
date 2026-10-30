@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { postJSON } from "../../lib/api";
+import PickField from "../map/PickField";
 import type { MapPickProps, ToolProps } from "./types";
 
 export interface RouteResult {
@@ -23,17 +24,18 @@ interface RoutingToolProps extends Omit<ToolProps, "importedLayers">, MapPickPro
 export default function RoutingTool({
   theme,
   mapRef,
-  mapPick,
-  onBeginMapPick,
-  onEndMapPick,
+  picker,
   start,
   destination,
   onStartChange,
   onDestinationChange,
 }: RoutingToolProps) {
   const isDark = theme === "dark";
-  const pickTarget =
-    mapPick === "start" || mapPick === "destination" ? mapPick : null;
+  const pickTarget = picker.isPicking("routing", "start")
+    ? "start"
+    : picker.isPicking("routing", "destination")
+      ? "destination"
+      : null;
 
   const [distance, setDistance] = useState<number | null>(null);
   const [error, setError] = useState("");
@@ -46,21 +48,20 @@ export default function RoutingTool({
       return;
     }
 
-    onBeginMapPick(target);
     setError("");
-    setDistance(null);
 
-    mapRef.current.clearRouteDistance();
-
-    mapRef.current.setRoutePickMode((coordinates) => {
-      if (target === "start") {
-        onStartChange(coordinates);
-      } else {
-        onDestinationChange(coordinates);
-      }
-
-      onEndMapPick();
-    });
+    picker.pickPoint(
+      "routing",
+      target,
+      `Click the map to set the route ${target}`,
+      (coordinates) => {
+        // Results only go stale once a new point is actually chosen.
+        setDistance(null);
+        setRoadRoute(null);
+        mapRef.current?.clearRouteDistance();
+        (target === "start" ? onStartChange : onDestinationChange)(coordinates);
+      },
+    );
   }
 
   function handleCalculateDistance() {
@@ -119,9 +120,9 @@ export default function RoutingTool({
 
   function handleClear() {
     mapRef.current?.clearRouteDistance();
-    mapRef.current?.setRoutePickMode(null);
-
-    if (pickTarget) onEndMapPick();
+    picker.cancel("routing");
+    picker.setMarker("routing", "start", null);
+    picker.setMarker("routing", "destination", null);
     onStartChange(null);
     onDestinationChange(null);
     setDistance(null);
@@ -130,66 +131,35 @@ export default function RoutingTool({
   }
 
   return (
-    <section
-      className={`rounded-xl border p-4 ${
-        isDark ? "border-white/10 bg-white/[0.03]" : "border-gray-200 bg-gray-50"
-      }`}
-    >
-      <div className="mb-3">
-        <h4 className="text-sm font-semibold">Routing & Distance Analysis</h4>
-        <p className="mt-1 text-xs leading-relaxed text-neutral-500">
-          Select two map locations to measure their straight-line distance.
-        </p>
+    <div>
+      <div className="space-y-3">
+        <PickField
+          isDark={isDark}
+          label="Start point"
+          value={start}
+          picking={pickTarget === "start"}
+          markerClass="bg-emerald-500"
+          onPick={() => handlePickPoint("start")}
+          onCancel={() => picker.cancel("routing")}
+          onClear={() => {
+            onStartChange(null);
+            picker.setMarker("routing", "start", null);
+          }}
+        />
+        <PickField
+          isDark={isDark}
+          label="Destination"
+          value={destination}
+          picking={pickTarget === "destination"}
+          markerClass="bg-violet-500"
+          onPick={() => handlePickPoint("destination")}
+          onCancel={() => picker.cancel("routing")}
+          onClear={() => {
+            onDestinationChange(null);
+            picker.setMarker("routing", "destination", null);
+          }}
+        />
       </div>
-
-      <button
-        type="button"
-        onClick={() => handlePickPoint("start")}
-        className={`w-full rounded-xl border px-3 py-2.5 text-sm font-medium transition-all ${
-          pickTarget === "start"
-            ? "border-amber-400/40 bg-amber-400/10 text-amber-500"
-            : isDark
-              ? "border-white/10 bg-white/5 hover:border-amber-400/30"
-              : "border-gray-200 bg-white/60 hover:border-amber-400/50"
-        }`}
-      >
-        {pickTarget === "start"
-          ? "Click the map to set start..."
-          : start
-            ? "Change Start Point"
-            : "Set Start Point"}
-      </button>
-
-      {start && (
-        <p className="mt-2 break-words text-xs text-neutral-500">
-          Start: {start[1].toFixed(5)}, {start[0].toFixed(5)}
-        </p>
-      )}
-
-      <button
-        type="button"
-        onClick={() => handlePickPoint("destination")}
-        className={`mt-3 w-full rounded-xl border px-3 py-2.5 text-sm font-medium transition-all ${
-          pickTarget === "destination"
-            ? "border-violet-400/40 bg-violet-400/10 text-violet-400"
-            : isDark
-              ? "border-white/10 bg-white/5 hover:border-violet-400/30"
-              : "border-gray-200 bg-white/60 hover:border-violet-400/50"
-        }`}
-      >
-        {pickTarget === "destination"
-          ? "Click the map to set destination..."
-          : destination
-            ? "Change Destination"
-            : "Set Destination"}
-      </button>
-
-      {destination && (
-        <p className="mt-2 break-words text-xs text-neutral-500">
-          Destination: {destination[1].toFixed(5)},{" "}
-          {destination[0].toFixed(5)}
-        </p>
-      )}
 
       <button
         type="button"
@@ -259,6 +229,6 @@ export default function RoutingTool({
       >
         Clear Route
       </button>
-    </section>
+    </div>
   );
 }

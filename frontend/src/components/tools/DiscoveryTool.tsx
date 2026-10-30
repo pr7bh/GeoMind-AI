@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { FeatureCollection, Geometry } from "geojson";
 import { getJSON, postJSON } from "../../lib/api";
+import PickField from "../map/PickField";
 import type { MapPickProps, ToolProps } from "./types";
 
 export interface DiscoveryCategory {
@@ -58,13 +59,11 @@ export default function DiscoveryTool({
   theme,
   mapRef,
   importedLayers,
-  mapPick,
-  onBeginMapPick,
-  onEndMapPick,
+  picker,
   onLayersChanged,
 }: DiscoveryToolProps) {
   const isDark = theme === "dark";
-  const pickActive = mapPick === "discovery";
+  const pickActive = picker.isPicking("discovery");
 
   const [categories, setCategories] = useState<DiscoveryCategory[]>([]);
   const [categoryId, setCategoryId] = useState("hospital");
@@ -112,26 +111,29 @@ export default function DiscoveryTool({
 
   function handlePickCenter() {
     setError("");
-    onBeginMapPick("discovery");
-
-    mapRef.current?.setNearestFeaturePickMode((coordinates) => {
-      setCenter(coordinates);
-      onEndMapPick();
-    });
+    picker.pickPoint(
+      "discovery",
+      "location",
+      "Click the map to set the discovery search centre",
+      setCenter,
+    );
   }
 
   function handleUseMapCenter() {
-    if (pickActive) {
-      mapRef.current?.setNearestFeaturePickMode(null);
-      onEndMapPick();
-    }
+    picker.cancel("discovery");
 
     const viewCenter = mapRef.current?.getViewCenter();
 
     if (viewCenter) {
       setCenter(viewCenter);
+      picker.setMarker("discovery", "location", viewCenter);
       setError("");
     }
+  }
+
+  function handleClearCenter() {
+    setCenter(null);
+    picker.setMarker("discovery", "location", null);
   }
 
   async function handleDiscover() {
@@ -192,18 +194,7 @@ export default function DiscoveryTool({
   }`;
 
   return (
-    <section
-      className={`rounded-xl border p-4 ${
-        isDark ? "border-white/10 bg-white/[0.03]" : "border-gray-200 bg-gray-50"
-      }`}
-    >
-      <div className="mb-3">
-        <h4 className="text-sm font-semibold">Discover OSM Features</h4>
-        <p className="mt-1 text-xs leading-relaxed text-neutral-500">
-          Load real features from OpenStreetMap around a location.
-        </p>
-      </div>
-
+    <div>
       <label className="block text-xs font-medium text-neutral-500">
         Category
       </label>
@@ -240,38 +231,25 @@ export default function DiscoveryTool({
         className={inputClass}
       />
 
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          onClick={handlePickCenter}
-          className={`rounded-xl border px-3 py-2.5 text-xs font-medium transition-all ${
-            pickActive
-              ? "border-amber-400/40 bg-amber-400/10 text-amber-500"
-              : isDark
-                ? "border-white/10 bg-white/5 hover:border-emerald-400/30"
-                : "border-gray-200 bg-white/60 hover:border-emerald-500/30"
-          }`}
-        >
-          {pickActive ? "Click the map..." : "Pick on Map"}
-        </button>
+      <div className="mt-3">
+        <PickField
+          isDark={isDark}
+          label="Search centre"
+          value={center}
+          picking={pickActive}
+          markerClass="bg-amber-500"
+          onPick={handlePickCenter}
+          onCancel={() => picker.cancel("discovery")}
+          onClear={handleClearCenter}
+        />
         <button
           type="button"
           onClick={handleUseMapCenter}
-          className={`rounded-xl border px-3 py-2.5 text-xs font-medium transition-all ${
-            isDark
-              ? "border-white/10 bg-white/5 hover:border-emerald-400/30"
-              : "border-gray-200 bg-white/60 hover:border-emerald-500/30"
-          }`}
+          className="mt-1.5 text-[11px] font-medium text-emerald-500 hover:underline"
         >
-          Use Map Centre
+          Use current map centre
         </button>
       </div>
-
-      {center && (
-        <p className="mt-2 break-all text-xs text-neutral-500">
-          Centre: {center[1].toFixed(5)}, {center[0].toFixed(5)}
-        </p>
-      )}
 
       <button
         type="button"
@@ -340,6 +318,6 @@ export default function DiscoveryTool({
           {discoveryLayerCount === 1 ? "" : "s"}
         </button>
       )}
-    </section>
+    </div>
   );
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import FeatureInspector from "../workspace/FeatureInspector";
 import type {
   SelectedFeatureInfo,
@@ -13,6 +14,7 @@ import {
   Layers,
   Maximize2,
   Download,
+  Upload,
 } from "lucide-react";
 import AppHeader from "./AppHeader";
 import Sidebar from "./Sidebar";
@@ -31,7 +33,12 @@ import HeatmapTool from "../tools/HeatmapTool";
 import RoutingTool from "../tools/RoutingTool";
 import SpatialQueryTool from "../tools/SpatialQueryTool";
 import IntersectionTool from "../tools/IntersectionTool";
-import type { MapPickTarget } from "../tools/types";
+import BufferTool from "../tools/BufferTool";
+import ToolPanel from "../tools/ToolPanel";
+import { WORKSPACE_TOOLS } from "../tools/registry";
+import type { WorkspaceToolId } from "../tools/registry";
+import { useMapPicker } from "../map/useMapPicker";
+import MapPickBanner from "../map/MapPickBanner";
 import { postJSON } from "../../lib/api";
 
 type Theme = "light" | "dark";
@@ -43,7 +50,7 @@ export default function AppLayout() {
   });
   const [importedLayers, setImportedLayers] = useState<ImportedLayerInfo[]>([]);
   const [isResearchOpen, setIsResearchOpen] = useState(false);
-  const [isLayersOpen, setIsLayersOpen] = useState(false);
+  const [activeTool, setActiveTool] = useState<WorkspaceToolId | null>(null);
   const [isBaseLayerVisible, setIsBaseLayerVisible] = useState(true);
   const [, setBaseMap] = useState<BaseMapType>("dark");
   const [drawingMode, setDrawingMode] = useState<DrawingMode>("none");
@@ -60,30 +67,28 @@ export default function AppLayout() {
     string,
     unknown
   > | null>(null);
-  const [isSpatialQueryExpanded, setIsSpatialQueryExpanded] = useState(false);
-  const [spatialMatchedCount, setSpatialMatchedCount] = useState<
-    number | null
-  >(null);
-  const [mapPick, setMapPick] = useState<MapPickTarget | null>(null);
   const [routeStart, setRouteStart] = useState<[number, number] | null>(null);
   const [routeDestination, setRouteDestination] = useState<
     [number, number] | null
   >(null);
 
-  function handleBeginMapPick(target: MapPickTarget) {
-    mapRef.current?.setNearestFeaturePickMode(null);
-    mapRef.current?.setRoutePickMode(null);
-    mapRef.current?.setDrawingMode("none");
-    setDrawingMode("none");
-    setMapPick(target);
+  function applyDrawingMode(mode: DrawingMode) {
+    setDrawingMode(mode);
+    mapRef.current?.setDrawingMode(mode);
+  }
+
+  const picker = useMapPicker(mapRef, {
+    mode: drawingMode,
+    setMode: applyDrawingMode,
+  });
+
+  function handleSelectTool(tool: WorkspaceToolId) {
+    // A pending pick belongs to the panel being left; chosen points are kept.
+    picker.cancel();
+    setActiveTool((current) => (current === tool ? null : tool));
   }
 
   const toolProps = { theme, mapRef, importedLayers };
-  const mapPickProps = {
-    mapPick,
-    onBeginMapPick: handleBeginMapPick,
-    onEndMapPick: () => setMapPick(null),
-  };
 
   function handleExportDrawings() {
     const geojson = mapRef.current?.exportDrawings();
@@ -229,377 +234,61 @@ export default function AppLayout() {
 
   const isDark = theme === "dark";
 
-  return (
-    <main
-      className={`flex h-screen w-screen flex-col overflow-hidden ${
-        isDark ? "bg-black text-white" : "bg-white text-black"
-      }`}
-    >
-      {/* Application header */}
-      <header className="z-40 flex h-16 shrink-0 items-center border-b border-neutral-800/70">
-        <div className="min-w-0 flex-1">
-          <AppHeader theme={theme} />
-        </div>
-
-        <div
-          className={`flex h-full shrink-0 items-center border-l px-4 ${
-            isDark ? "border-neutral-800 bg-black" : "border-gray-200 bg-white"
-          }`}
-        >
-          <button
-            type="button"
-            onClick={() =>
-              setTheme((current) => (current === "dark" ? "light" : "dark"))
-            }
-            aria-label={`Switch to ${isDark ? "light" : "dark"} mode`}
-            title={`Switch to ${isDark ? "light" : "dark"} mode`}
-            className={`rounded-lg border p-2 transition-colors ${
-              isDark
-                ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800"
-                : "border-gray-200 text-gray-700 hover:bg-gray-100"
-            }`}
-          >
-            {isDark ? <Sun size={18} /> : <Moon size={18} />}
-          </button>
-        </div>
-      </header>
-
-      {/* Main workspace */}
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        <Sidebar theme={theme} onOpenResearch={() => setIsResearchOpen(true)} />
-
-        {/* Map and its floating controls */}
-        <section className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
-          <div className="absolute inset-0 z-0">
-            <GeoMap ref={mapRef} theme={theme} />
-          </div>
-          {/* Premium GIS location search */}
-
-          <div className="pointer-events-none absolute left-1/2 top-4 z-50 w-[min(28rem,calc(100%-2rem))] -translate-x-1/2">
-            <div className="pointer-events-auto w-full">
-              <LocationSearch
-                theme={theme}
-                onSelectLocation={(longitude, latitude) => {
-                  mapRef.current?.goToLocation(longitude, latitude);
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Map navigation controls: top-right */}
-          <div className="pointer-events-none absolute right-4 top-4 z-20 max-w-[calc(100%-2rem)]">
-            <div className="pointer-events-auto *:static! *:inset-auto! *:m-0! *:transform-none!">
-              <MapToolbar
-                theme={theme}
-                isLayersOpen={isLayersOpen}
-                onZoomIn={() => mapRef.current?.zoomIn()}
-                onZoomOut={() => mapRef.current?.zoomOut()}
-                onReset={() => mapRef.current?.resetView()}
-                onToggleLayers={() => setIsLayersOpen((open) => !open)}
-              />
-            </div>
-          </div>
-
-          {/* Workspace status: bottom-left */}
-          <div className="pointer-events-none absolute bottom-4 left-4 z-10 max-w-[calc(100%-2rem)]">
-            <div className="pointer-events-auto *:static! *:inset-auto! *:m-0! *:transform-none!">
-              <WorkspaceStatus theme={theme} />
-            </div>
-          </div>
-
-          {/* Drawing controls: bottom-center */}
-          <div className="pointer-events-none absolute bottom-4 right-0 z-20 w-max max-w-[calc(100%-2rem)] -translate-x-1/2">
-            <div className="pointer-events-auto *:static! *:inset-auto! *:m-0! *:transform-none!">
-              <DrawingToolbar
-                theme={theme}
-                mode={drawingMode}
-                onModeChange={(mode) => {
-                  setDrawingMode(mode);
-                  mapRef.current?.setDrawingMode(mode);
-                }}
-                onClear={() => mapRef.current?.clearDrawings()}
-                onExport={handleExportDrawings}
-                onImport={() => setIsImportOpen(true)}
-              />
-            </div>
-          </div>
-
-          {/* Spatial Query Builder */}
-
-          {/* Spatial Query Builder — Glass UI */}
-          <div
-            className={`absolute left-4 top-4 z-20 flex w-80 max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border p-[0.2rem] shadow-2xl backdrop-blur-2xl transition-all duration-300 ${
-              isDark
-                ? "border-white/10 bg-neutral-950/65 text-white shadow-black/30"
-                : "border-white/70 bg-white/70 text-black shadow-gray-900/10"
-            }`}
-          >
-            {/* Compact glass header */}
-            <button
-              type="button"
-              onClick={() => setIsSpatialQueryExpanded((expanded) => !expanded)}
-              aria-expanded={isSpatialQueryExpanded}
-              className={`group flex w-full shrink-0 items-center gap-2.5 rounded-xl px-3 py-2 transition-all duration-200 ${
-                isDark
-                  ? "hover:bg-white/6 hover:shadow-[inset_0_0_18px_rgba(16,185,129,0.05)]"
-                  : "hover:bg-white/60 hover:shadow-[inset_0_0_18px_rgba(16,185,129,0.08)]"
-              }`}
-            >
-              <div
-                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition-all duration-200 ${
+  const toolContent: Record<WorkspaceToolId, ReactNode> = {
+    discovery: (
+      <DiscoveryTool
+        {...toolProps}
+        picker={picker}
+        onLayersChanged={refreshImportedLayers}
+      />
+    ),
+    routing: (
+      <RoutingTool
+        theme={theme}
+        mapRef={mapRef}
+        picker={picker}
+        start={routeStart}
+        destination={routeDestination}
+        onStartChange={setRouteStart}
+        onDestinationChange={setRouteDestination}
+      />
+    ),
+    nearest: <NearestFeatureTool {...toolProps} picker={picker} />,
+    buffer: (
+      <BufferTool
+        theme={theme}
+        mapRef={mapRef}
+        picker={picker}
+        onLayersChanged={refreshImportedLayers}
+      />
+    ),
+    "spatial-query": (
+      <SpatialQueryTool
+        {...toolProps}
+        picker={picker}
+        onLayersChanged={refreshImportedLayers}
+      />
+    ),
+    intersection: (
+      <IntersectionTool {...toolProps} onLayersChanged={refreshImportedLayers} />
+    ),
+    heatmap: <HeatmapTool {...toolProps} />,
+    layers: (
+      <>
+              <button
+                type="button"
+                onClick={() => setIsImportOpen(true)}
+                className={`mb-4 flex w-full items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-medium transition-colors ${
                   isDark
-                    ? "border-emerald-400/20 bg-emerald-400/10 group-hover:border-emerald-400/40 group-hover:bg-emerald-400/15"
-                    : "border-emerald-500/20 bg-emerald-500/10 group-hover:bg-emerald-500/15"
+                    ? "border-emerald-400/25 text-emerald-400 hover:bg-emerald-400/10"
+                    : "border-emerald-500/30 text-emerald-700 hover:bg-emerald-50"
                 }`}
               >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  className="h-4 w-4 text-emerald-500"
-                >
-                  <path d="M4 5h16M7 12h10M10 19h4" strokeLinecap="round" />
-                  <circle cx="7" cy="5" r="1" fill="currentColor" />
-                  <circle cx="17" cy="12" r="1" fill="currentColor" />
-                </svg>
-              </div>
-
-              <div className="min-w-0 flex-1 text-left">
-                <h3 className="text-xs font-semibold tracking-tight">
-                  Spatial Query Builder
-                </h3>
-                <p className="mt-0.5 text-[10px] text-neutral-500">
-                  {isSpatialQueryExpanded
-                    ? "Query spatial relationships"
-                    : spatialMatchedCount !== null
-                      ? `${spatialMatchedCount} features matched`
-                      : "Configure spatial analysis"}
-                </p>
-              </div>
-
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                className={`h-3.5 w-3.5 shrink-0 text-neutral-500 transition-all duration-200 group-hover:scale-110 group-hover:text-emerald-400 ${
-                  isSpatialQueryExpanded ? "rotate-180" : ""
-                }`}
-              >
-                <path
-                  d="m6 9 6 6 6-6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
-
-            {/* Expandable scroll area */}
-            <div
-              className={`grid min-h-0 transition-[grid-template-rows,opacity] duration-300 ease-in-out ${
-                isSpatialQueryExpanded
-                  ? "grid-rows-[1fr] opacity-100"
-                  : "grid-rows-[0fr] opacity-0"
-              }`}
-              aria-hidden={!isSpatialQueryExpanded}
-              inert={!isSpatialQueryExpanded}
-            >
-              <div className="min-h-0 overflow-hidden">
-                <div
-                  className={`max-h-[calc(100vh-13rem)] space-y-4 overflow-x-hidden overflow-y-auto overscroll-contain border-t p-4 ${
-                    isDark
-                      ? "border-white/10 scrollbar-thin-dark"
-                      : "border-white/70 scrollbar-thin-light"
-                  }`}
-                >
-                  <DiscoveryTool
-                    {...toolProps}
-                    {...mapPickProps}
-                    onLayersChanged={refreshImportedLayers}
-                  />
-
-                  <NearestFeatureTool {...toolProps} {...mapPickProps} />
-
-                  <HeatmapTool {...toolProps} />
-
-                  <RoutingTool
-                    theme={theme}
-                    mapRef={mapRef}
-                    {...mapPickProps}
-                    start={routeStart}
-                    destination={routeDestination}
-                    onStartChange={setRouteStart}
-                    onDestinationChange={setRouteDestination}
-                  />
-
-                  <div
-                    className={`border-t pt-4 ${
-                      isDark ? "border-white/10" : "border-gray-200/70"
-                    }`}
-                  >
-                    <SpatialQueryTool
-                      {...toolProps}
-                      onLayersChanged={refreshImportedLayers}
-                      onMatchedCountChange={setSpatialMatchedCount}
-                    />
-                  </div>
-
-                  <IntersectionTool
-                    {...toolProps}
-                    onLayersChanged={refreshImportedLayers}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Selected feature details: right side */}
-          {selectedFeature && (
-            <div className="pointer-events-none absolute inset-0 z-20">
-              {/* Drag bounds only; the inspector itself re-enables pointer events. */}
-              <div className="pointer-events-none absolute inset-0">
-                <FeatureInspector
-                  theme={theme}
-                  feature={selectedFeature}
-                  onClose={() => {
-                    setSelectedFeature(null);
-setNearestFeatureDetails(null);
-mapRef.current?.clearFeatureSelection();
-                  }}
-                  onCreateBuffer={handleCreateBuffer}
-                  onAnalyzePointsInPolygon={handleAnalyzePointsInPolygon}
-                  onClearPointAnalysis={handleClearPointAnalysis}
-                  pointAnalysisResult={pointAnalysisResult}
-                  nearestFeatureDetails={nearestFeatureDetails}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Layer chooser: aligned below the map controls */}
-          {isLayersOpen && (
-            <aside
-              className={`absolute right-16 top-18 z-30 max-h-[calc(100%-6rem)] w-72 max-w-[calc(100%-2rem)] overflow-y-auto rounded-2xl border p-4 backdrop-blur-2xl backdrop-saturate-150 transition-all duration-300 ${
-                isDark
-                  ? "border-white/[0.14] bg-neutral-950/70 text-white shadow-[0_20px_55px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.08)]"
-                  : "border-white/80 bg-white/70 text-gray-900 shadow-[0_20px_55px_rgba(15,23,42,0.12),inset_0_1px_0_rgba(255,255,255,0.85)]"
-              }`}
-            >
-              {/* Base map */}
-              <section>
-                {/* <h3 className="text-sm font-semibold tracking-tight">
-                  Base map
-                </h3>
-
-                <p
-                  className={`mt-1 text-xs ${
-                    isDark ? "text-neutral-400" : "text-gray-500"
-                  }`}
-                >
-                  Choose your map appearance
-                </p>
-
-                <div className="mt-4 flex flex-col gap-2">
-                  {(
-                    [
-                      {
-                        value: "light",
-                        label: "Light",
-                        detail: "Light basemap",
-                      },
-                      { value: "dark", label: "Dark", detail: "Dark basemap" },
-                      {
-                        value: "satellite",
-                        label: "Satellite",
-                        detail: "Coming later",
-                      },
-                    ] as const
-                  ).map((option) => {
-                    const isSelected = baseMap === option.value;
-                    const isDisabled = option.value === "satellite";
-
-                    return (
-                      <button
-                        key={option.value}
-                        type="button"
-                        disabled={isDisabled}
-                        onClick={() => {
-                          if (isDisabled) return;
-
-                          setBaseMap(option.value);
-                          mapRef.current?.setBaseMap(option.value);
-                        }}
-                        className={`flex items-center justify-between rounded-xl border p-3 text-left transition-all duration-200 ${
-                          isSelected
-                            ? isDark
-                              ? "border-emerald-400/35 bg-emerald-400/[0.12] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
-                              : "border-emerald-300/80 bg-emerald-50/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]"
-                            : isDark
-                              ? "border-white/[0.08] bg-white/[0.035] hover:border-white/20 hover:bg-white/[0.07]"
-                              : "border-white/80 bg-white/40 hover:border-emerald-200/80 hover:bg-white/75"
-                        } ${
-                          isDisabled
-                            ? "cursor-not-allowed opacity-40"
-                            : "cursor-pointer"
-                        }`}
-                      >
-                        <span>
-                          <span className="block text-sm font-medium">
-                            {option.label}
-                          </span>
-
-                          <span
-                            className={`mt-1 block text-xs ${
-                              isDark ? "text-neutral-400" : "text-gray-500"
-                            }`}
-                          >
-                            {option.detail}
-                          </span>
-                        </span>
-
-                        {isSelected && (
-                          <span
-                            className="text-sm font-semibold text-emerald-500"
-                            aria-label="Selected"
-                          >
-                            ✓
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div> */}
-
-                {/* Base map visibility */}
-                <div>
-                  <label
-                    className={`flex cursor-pointer items-center gap-3 rounded-xl p-2 text-sm transition-colors ${
-                      isDark ? "hover:bg-white/[0.05]" : "hover:bg-white/60"
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={isBaseLayerVisible}
-                      onChange={(event) => {
-                        const visible = event.target.checked;
-
-                        mapRef.current?.toggleBaseLayer(visible);
-                        setIsBaseLayerVisible(visible);
-                      }}
-                      className="accent-emerald-500"
-                    />
-                    Show base map
-                  </label>
-                </div>
-              </section>
-
+                <Upload size={15} />
+                Import GeoJSON
+              </button>
               {/* Imported layers */}
-              <section
-                className={`mt-4 border-t pt-4 ${
-                  isDark ? "border-white/[0.09]" : "border-gray-200/70"
-                }`}
-              >
+              <section>
                 <div className="flex items-center gap-2">
                   <Layers size={16} className="shrink-0 text-emerald-500" />
 
@@ -773,8 +462,304 @@ mapRef.current?.clearFeatureSelection();
                   </button>
                 )}
               </section>
-            </aside>
+      </>
+    ),
+    settings: (
+      <>
+              {/* Base map */}
+              <section>
+                {/* <h3 className="text-sm font-semibold tracking-tight">
+                  Base map
+                </h3>
+
+                <p
+                  className={`mt-1 text-xs ${
+                    isDark ? "text-neutral-400" : "text-gray-500"
+                  }`}
+                >
+                  Choose your map appearance
+                </p>
+
+                <div className="mt-4 flex flex-col gap-2">
+                  {(
+                    [
+                      {
+                        value: "light",
+                        label: "Light",
+                        detail: "Light basemap",
+                      },
+                      { value: "dark", label: "Dark", detail: "Dark basemap" },
+                      {
+                        value: "satellite",
+                        label: "Satellite",
+                        detail: "Coming later",
+                      },
+                    ] as const
+                  ).map((option) => {
+                    const isSelected = baseMap === option.value;
+                    const isDisabled = option.value === "satellite";
+
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        disabled={isDisabled}
+                        onClick={() => {
+                          if (isDisabled) return;
+
+                          setBaseMap(option.value);
+                          mapRef.current?.setBaseMap(option.value);
+                        }}
+                        className={`flex items-center justify-between rounded-xl border p-3 text-left transition-all duration-200 ${
+                          isSelected
+                            ? isDark
+                              ? "border-emerald-400/35 bg-emerald-400/[0.12] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
+                              : "border-emerald-300/80 bg-emerald-50/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]"
+                            : isDark
+                              ? "border-white/[0.08] bg-white/[0.035] hover:border-white/20 hover:bg-white/[0.07]"
+                              : "border-white/80 bg-white/40 hover:border-emerald-200/80 hover:bg-white/75"
+                        } ${
+                          isDisabled
+                            ? "cursor-not-allowed opacity-40"
+                            : "cursor-pointer"
+                        }`}
+                      >
+                        <span>
+                          <span className="block text-sm font-medium">
+                            {option.label}
+                          </span>
+
+                          <span
+                            className={`mt-1 block text-xs ${
+                              isDark ? "text-neutral-400" : "text-gray-500"
+                            }`}
+                          >
+                            {option.detail}
+                          </span>
+                        </span>
+
+                        {isSelected && (
+                          <span
+                            className="text-sm font-semibold text-emerald-500"
+                            aria-label="Selected"
+                          >
+                            ✓
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div> */}
+
+                {/* Base map visibility */}
+                <div>
+                  <label
+                    className={`flex cursor-pointer items-center gap-3 rounded-xl p-2 text-sm transition-colors ${
+                      isDark ? "hover:bg-white/[0.05]" : "hover:bg-white/60"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isBaseLayerVisible}
+                      onChange={(event) => {
+                        const visible = event.target.checked;
+
+                        mapRef.current?.toggleBaseLayer(visible);
+                        setIsBaseLayerVisible(visible);
+                      }}
+                      className="accent-emerald-500"
+                    />
+                    Show base map
+                  </label>
+                </div>
+              </section>
+              {/* Appearance */}
+              <section
+                className={`mt-4 border-t pt-4 ${
+                  isDark ? "border-white/[0.09]" : "border-gray-200/70"
+                }`}
+              >
+                <h3 className="text-sm font-semibold tracking-tight">Appearance</h3>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  {(["dark", "light"] as const).map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => setTheme(option)}
+                      aria-pressed={theme === option}
+                      className={`flex items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-medium capitalize transition-colors ${
+                        theme === option
+                          ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-500"
+                          : isDark
+                            ? "border-white/10 hover:bg-white/5"
+                            : "border-gray-200 hover:bg-gray-50"
+                      }`}
+                    >
+                      {option === "dark" ? <Moon size={14} /> : <Sun size={14} />}
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              </section>
+      </>
+    ),
+  };
+
+  return (
+    <main
+      className={`flex h-screen w-screen flex-col overflow-hidden ${
+        isDark ? "bg-black text-white" : "bg-white text-black"
+      }`}
+    >
+      {/* Application header */}
+      <header className="z-40 flex h-16 shrink-0 items-center border-b border-neutral-800/70">
+        <div className="min-w-0 flex-1">
+          <AppHeader theme={theme} />
+        </div>
+
+        <div
+          className={`flex h-full shrink-0 items-center border-l px-4 ${
+            isDark ? "border-neutral-800 bg-black" : "border-gray-200 bg-white"
+          }`}
+        >
+          <button
+            type="button"
+            onClick={() =>
+              setTheme((current) => (current === "dark" ? "light" : "dark"))
+            }
+            aria-label={`Switch to ${isDark ? "light" : "dark"} mode`}
+            title={`Switch to ${isDark ? "light" : "dark"} mode`}
+            className={`rounded-lg border p-2 transition-colors ${
+              isDark
+                ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800"
+                : "border-gray-200 text-gray-700 hover:bg-gray-100"
+            }`}
+          >
+            {isDark ? <Sun size={18} /> : <Moon size={18} />}
+          </button>
+        </div>
+      </header>
+
+      {/* Main workspace */}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <Sidebar
+          theme={theme}
+          activeTool={activeTool}
+          isResearchOpen={isResearchOpen}
+          onSelectTool={handleSelectTool}
+          onToggleResearch={() => setIsResearchOpen((open) => !open)}
+        />
+
+        {/* Map and its floating controls */}
+        <section className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
+          <div className="absolute inset-0 z-0">
+            <GeoMap ref={mapRef} theme={theme} />
+          </div>
+          {/* Premium GIS location search */}
+
+          <div className="pointer-events-none absolute left-1/2 top-4 z-50 w-[min(28rem,calc(100%-2rem))] -translate-x-1/2">
+            <div className="pointer-events-auto w-full">
+              <LocationSearch
+                theme={theme}
+                onSelectLocation={(longitude, latitude) => {
+                  mapRef.current?.goToLocation(longitude, latitude);
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Map navigation controls: top-right */}
+          <div className="pointer-events-none absolute right-4 top-4 z-20 max-w-[calc(100%-2rem)]">
+            <div className="pointer-events-auto *:static! *:inset-auto! *:m-0! *:transform-none!">
+              <MapToolbar
+                theme={theme}
+                isLayersOpen={activeTool === "layers"}
+                onZoomIn={() => mapRef.current?.zoomIn()}
+                onZoomOut={() => mapRef.current?.zoomOut()}
+                onReset={() => mapRef.current?.resetView()}
+                onToggleLayers={() => handleSelectTool("layers")}
+              />
+            </div>
+          </div>
+
+          {/* Workspace status: bottom-left */}
+          <div className="pointer-events-none absolute bottom-4 left-4 z-10 max-w-[calc(100%-2rem)]">
+            <div className="pointer-events-auto *:static! *:inset-auto! *:m-0! *:transform-none!">
+              <WorkspaceStatus theme={theme} />
+            </div>
+          </div>
+
+          {/* Drawing controls: bottom-center */}
+          <div className="pointer-events-none absolute bottom-4 right-0 z-20 w-max max-w-[calc(100%-2rem)] -translate-x-1/2">
+            <div className="pointer-events-auto *:static! *:inset-auto! *:m-0! *:transform-none!">
+              <DrawingToolbar
+                theme={theme}
+                mode={drawingMode}
+                onModeChange={(mode) => {
+                  picker.cancel();
+                  applyDrawingMode(mode);
+                }}
+                onClear={() => mapRef.current?.clearDrawings()}
+                onExport={handleExportDrawings}
+                onImport={() => setIsImportOpen(true)}
+              />
+            </div>
+          </div>
+
+          {/* Map-pick instruction */}
+          {picker.active && (
+            <div className="pointer-events-none absolute left-1/2 top-20 z-50 -translate-x-1/2">
+              <MapPickBanner
+                isDark={isDark}
+                pick={picker.active}
+                onCancel={() => picker.cancel()}
+              />
+            </div>
           )}
+
+          {/* Active tool panel. All panels stay mounted so selections survive switching. */}
+          <div className="pointer-events-none absolute bottom-16 left-4 top-4 z-30 flex items-start">
+            {WORKSPACE_TOOLS.map((tool) => (
+              <ToolPanel
+                key={tool.id}
+                isDark={isDark}
+                tool={tool}
+                hidden={activeTool !== tool.id}
+                onClose={() => handleSelectTool(tool.id)}
+              >
+                {toolContent[tool.id]}
+              </ToolPanel>
+            ))}
+          </div>
+
+          {/* Selected feature details: right side */}
+          {selectedFeature && (
+            <div className="pointer-events-none absolute inset-0 z-20">
+              {/* Drag bounds only (right of the tool panel, below the search bar);
+                  the inspector itself re-enables pointer events. */}
+              <div
+                className={`pointer-events-none absolute bottom-0 right-0 top-20 ${
+                  activeTool ? "left-[21.5rem]" : "left-0"
+                }`}
+              >
+                <FeatureInspector
+                  theme={theme}
+                  feature={selectedFeature}
+                  onClose={() => {
+                    setSelectedFeature(null);
+setNearestFeatureDetails(null);
+mapRef.current?.clearFeatureSelection();
+                  }}
+                  onCreateBuffer={handleCreateBuffer}
+                  onAnalyzePointsInPolygon={handleAnalyzePointsInPolygon}
+                  onClearPointAnalysis={handleClearPointAnalysis}
+                  pointAnalysisResult={pointAnalysisResult}
+                  nearestFeatureDetails={nearestFeatureDetails}
+                />
+              </div>
+            </div>
+          )}
+
         </section>
 
         {/* Research panel remains outside the map canvas */}

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Feature as GeoJSONFeature } from "geojson";
 import { postJSON } from "../../lib/api";
+import PickField from "../map/PickField";
 import LayerSelect from "./LayerSelect";
 import { readLayerFeatures } from "./readLayerFeatures";
 import type { MapPickProps, ToolProps } from "./types";
@@ -27,12 +28,10 @@ export default function NearestFeatureTool({
   theme,
   mapRef,
   importedLayers,
-  mapPick,
-  onBeginMapPick,
-  onEndMapPick,
+  picker,
 }: ToolProps & MapPickProps) {
   const isDark = theme === "dark";
-  const pickActive = mapPick === "nearest";
+  const pickActive = picker.isPicking("nearest");
 
   const [layerId, setLayerId] = useState("");
   const [origin, setOrigin] = useState<[number, number] | null>(null);
@@ -44,16 +43,19 @@ export default function NearestFeatureTool({
 
   function handlePickOrigin() {
     setResult(null);
+    setTopResult(null);
     setError("");
-    onBeginMapPick("nearest");
-
     mapRef.current?.clearNearestFeatureHighlight();
 
-    mapRef.current?.setNearestFeaturePickMode((coordinates) => {
-      setOrigin(coordinates);
-      onEndMapPick();
-      setError("");
-    });
+    picker.pickPoint(
+      "nearest",
+      "reference",
+      "Click the map to set the reference point",
+      (coordinates) => {
+        setOrigin(coordinates);
+        setError("");
+      },
+    );
   }
 
   function validateInput() {
@@ -135,12 +137,8 @@ export default function NearestFeatureTool({
   }
 
   function handleClear() {
-    // The point-pick callback is shared, so only cancel it if this tool owns it.
-    if (pickActive) {
-      mapRef.current?.setNearestFeaturePickMode(null);
-      onEndMapPick();
-    }
-
+    picker.cancel("nearest");
+    picker.setMarker("nearest", "reference", null);
     mapRef.current?.clearNearestFeatureHighlight();
     setOrigin(null);
     setResult(null);
@@ -171,29 +169,19 @@ export default function NearestFeatureTool({
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={handlePickOrigin}
-          className={`w-full rounded-xl border px-3 py-2.5 text-sm font-medium transition-all ${
-            pickActive
-              ? "border-amber-400/40 bg-amber-400/10 text-amber-500"
-              : isDark
-                ? "border-white/10 bg-white/5 hover:border-emerald-400/30"
-                : "border-gray-200 bg-white/60 hover:border-emerald-500/30"
-          }`}
-        >
-          {pickActive
-            ? "Click a location on the map..."
-            : origin
-              ? "Choose Another Location"
-              : "Pick Location on Map"}
-        </button>
-
-        {origin && (
-          <p className="mt-2 break-all text-xs text-neutral-500">
-            Location: {origin[1].toFixed(5)}, {origin[0].toFixed(5)}
-          </p>
-        )}
+        <PickField
+          isDark={isDark}
+          label="Reference point"
+          value={origin}
+          picking={pickActive}
+          markerClass="bg-sky-500"
+          onPick={handlePickOrigin}
+          onCancel={() => picker.cancel("nearest")}
+          onClear={() => {
+            setOrigin(null);
+            picker.setMarker("nearest", "reference", null);
+          }}
+        />
 
         <button
           type="button"

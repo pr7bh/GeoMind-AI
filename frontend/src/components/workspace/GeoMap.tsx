@@ -13,7 +13,7 @@ import Feature from "ol/Feature";
 import Point from "ol/geom/Point";
 import VectorLayer from "ol/layer/Vector";
 import VectorSource from "ol/source/Vector";
-import { Circle, Fill, Stroke, Style } from "ol/style";
+import { Circle, Fill, Stroke, Style, Text } from "ol/style";
 import Draw from "ol/interaction/Draw";
 import type { DrawingMode } from "./DrawingToolbar";
 import Select from "ol/interaction/Select";
@@ -38,6 +38,19 @@ export interface SelectedFeatureInfo {
 }
 
 export type MapLayerKind = "imported" | "analysis" | "discovery";
+
+export type PickMarkerRole = "start" | "destination" | "reference" | "location";
+
+export type MapPickRequest =
+  | {
+      mode: "point";
+      onPick: (coordinates: [number, number]) => void;
+    }
+  | {
+      mode: "feature";
+      geometryTypes?: string[];
+      onPick: (feature: GeoJSONFeature) => void;
+    };
 
 export interface ImportedLayerInfo {
   id: string;
@@ -95,8 +108,12 @@ export interface GeoMapHandle {
   getImportedGeoJSON: (layerId: string) => string | null;
   highlightSpatialQueryResults: (features: GeoJSONFeature[]) => void;
   addClipResultGeoJSON: (geojson: string, layerName?: string) => void;
-  setNearestFeaturePickMode: (
-    callback: ((coordinates: [number, number]) => void) | null,
+  startMapPick: (request: MapPickRequest) => void;
+  cancelMapPick: () => void;
+  setPickMarker: (
+    key: string,
+    role: PickMarkerRole,
+    coordinates: [number, number] | null,
   ) => void;
   highlightNearestFeature: (
     origin: [number, number],
@@ -108,9 +125,6 @@ export interface GeoMapHandle {
     features: GeoJSONFeature[],
   ) => void;
   setHeatmap: (layerId: string | null, radius: number, blur: number) => void;
-  setRoutePickMode: (
-    callback: ((coordinates: [number, number]) => void) | null,
-  ) => void;
 
   showRouteDistance: (
     start: [number, number],
@@ -156,6 +170,37 @@ const DISCOVERY_COLORS = [
   "#fb923c",
 ];
 
+const PICK_MARKER_STYLES: Record<PickMarkerRole, { color: string; label: string }> = {
+  start: { color: "#10b981", label: "A" },
+  destination: { color: "#8b5cf6", label: "B" },
+  reference: { color: "#0ea5e9", label: "R" },
+  location: { color: "#f59e0b", label: "" },
+};
+
+function pickMarkerStyle(role: PickMarkerRole) {
+  const { color, label } = PICK_MARKER_STYLES[role];
+
+  return new Style({
+    image: new Circle({
+      radius: label ? 10 : 7,
+      fill: new Fill({ color }),
+      stroke: new Stroke({ color: "#ffffff", width: 2.5 }),
+    }),
+    text: label
+      ? new Text({
+          text: label,
+          font: "700 11px Inter, system-ui, sans-serif",
+          fill: new Fill({ color: "#ffffff" }),
+        })
+      : undefined,
+  });
+}
+
+function setViewportCursor(map: Map, cursor: string) {
+  const viewport = map.getViewport();
+  if (viewport) viewport.style.cursor = cursor;
+}
+
 function discoveryStyle(color: string) {
   return new Style({
     fill: new Fill({ color: `${color}33` }),
@@ -195,12 +240,9 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
   const nearestFeatureLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
   const nearestOriginLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
 
-  const nearestFeaturePickCallbackRef = useRef<
-    ((coordinates: [number, number]) => void) | null
-  >(null);
-  const routePickCallbackRef = useRef<
-    ((coordinates: [number, number]) => void) | null
-  >(null);
+  const pickRequestRef = useRef<MapPickRequest | null>(null);
+  const pickRestoreCursorRef = useRef("");
+  const pickMarkerSourceRef = useRef<VectorSource | null>(null);
   const routeLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
 
   const onFeatureSelectRef = useRef<
@@ -784,8 +826,47 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
         });
       }
     },
-    setNearestFeaturePickMode(callback) {
-      nearestFeaturePickCallbackRef.current = callback;
+    startMapPick(request) {
+      const map = mapInstance.current;
+
+      if (!map) return;
+
+      if (!pickRequestRef.current) {
+        pickRestoreCursorRef.current = map.getViewport()?.style.cursor ?? "";
+      }
+
+      pickRequestRef.current = request;
+      setViewportCursor(map, "crosshair");
+      // Pause feature selection so a pick click does not also select.
+      selectInteractionRef.current?.setActive(false);
+    },
+    cancelMapPick() {
+      const map = mapInstance.current;
+
+      if (!pickRequestRef.current) return;
+
+      pickRequestRef.current = null;
+      selectInteractionRef.current?.setActive(true);
+
+      if (map) {
+        setViewportCursor(map, pickRestoreCursorRef.current);
+      }
+    },
+    setPickMarker(key, role, coordinates) {
+      const source = pickMarkerSourceRef.current;
+
+      if (!source) return;
+
+      const existing = source.getFeatureById(key);
+
+      if (existing) source.removeFeature(existing);
+
+      if (!coordinates) return;
+
+      const marker = new Feature({ geometry: new Point(fromLonLat(coordinates)) });
+      marker.setId(key);
+      marker.setStyle(pickMarkerStyle(role));
+      source.addFeature(marker);
     },
 
     highlightNearestFeature(origin, feature) {
@@ -1048,9 +1129,6 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
       heatmapLayer.set("name", "geomind-heatmap");
       map.addLayer(heatmapLayer);
     },
-    setRoutePickMode(callback) {
-      routePickCallbackRef.current = callback;
-    },
 
     showRouteDistance(start, destination) {
       const map = mapInstance.current;
@@ -1128,8 +1206,6 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
         map.removeLayer(routeLayerRef.current);
         routeLayerRef.current = null;
       }
-
-      routePickCallbackRef.current = null;
     },
 
 showRoadRoute(geometry) {
@@ -1420,6 +1496,14 @@ clearDiscoveryLayers() {
       }),
     });
 
+    const pickMarkerSource = new VectorSource();
+    pickMarkerSourceRef.current = pickMarkerSource;
+
+    const pickMarkerLayer = new VectorLayer({
+      source: pickMarkerSource,
+      zIndex: 1100,
+    });
+
     baseLayers.current = {
       light: lightLayer,
       dark: darkLayer,
@@ -1427,7 +1511,7 @@ clearDiscoveryLayers() {
 
     const map = new Map({
       target: mapElement.current,
-      layers: [lightLayer, darkLayer, drawingLayer, markerLayer],
+      layers: [lightLayer, darkLayer, drawingLayer, markerLayer, pickMarkerLayer],
       view: new View({
         center: INITIAL_CENTER,
         zoom: INITIAL_ZOOM,
@@ -1440,21 +1524,55 @@ clearDiscoveryLayers() {
       const [longitude, latitude] = toLonLat(event.coordinate);
       const coordinates: [number, number] = [longitude, latitude];
 
-      const routeCallback = routePickCallbackRef.current;
+      const request = pickRequestRef.current;
 
-      if (routeCallback) {
-        routePickCallbackRef.current = null;
-        routeCallback(coordinates);
+      if (!request) return;
+
+      if (request.mode === "point") {
+        finishPick();
+        request.onPick(coordinates);
         return;
       }
 
-      const nearestCallback = nearestFeaturePickCallbackRef.current;
+      let picked: Feature | undefined;
 
-      if (nearestCallback) {
-        nearestFeaturePickCallbackRef.current = null;
-        nearestCallback(coordinates);
-      }
+      map.forEachFeatureAtPixel(
+        event.pixel,
+        (feature) => {
+          const type = feature.getGeometry()?.getType() ?? "";
+
+          if (request.geometryTypes && !request.geometryTypes.includes(type)) {
+            return undefined;
+          }
+
+          picked = feature as Feature;
+          return true;
+        },
+        {
+          hitTolerance: 4,
+          layerFilter: (layer) =>
+            layer === drawingLayer ||
+            importedLayersRef.current.some((record) => record.layer === layer),
+        },
+      );
+
+      // Clicking empty map keeps feature-pick mode active.
+      if (!picked) return;
+
+      const geojson = new GeoJSON().writeFeatureObject(picked, {
+        featureProjection: "EPSG:3857",
+        dataProjection: "EPSG:4326",
+      });
+
+      finishPick();
+      request.onPick(geojson);
     });
+
+    function finishPick() {
+      pickRequestRef.current = null;
+      selectInteractionRef.current?.setActive(true);
+      setViewportCursor(map, pickRestoreCursorRef.current);
+    }
 
     const selectInteraction = new Select({
       condition: click,
@@ -1558,10 +1676,10 @@ clearDiscoveryLayers() {
       markerSourceRef.current = null;
       drawingSourceRef.current = null;
       importedLayersRef.current = [];
-      nearestFeaturePickCallbackRef.current = null;
+      pickRequestRef.current = null;
+      pickMarkerSourceRef.current = null;
       nearestFeatureLayerRef.current = null;
       nearestOriginLayerRef.current = null;
-      routePickCallbackRef.current = null;
       routeLayerRef.current = null;
     };
   }, []);

@@ -25,7 +25,6 @@ export default function IntersectionTool({
 }: IntersectionToolProps) {
   const isDark = theme === "dark";
 
-  const [isExpanded, setIsExpanded] = useState(false);
   const [layerAId, setLayerAId] = useState("");
   const [layerBId, setLayerBId] = useState("");
   const [result, setResult] = useState<IntersectionResult | null>(null);
@@ -97,125 +96,87 @@ export default function IntersectionTool({
   }
 
   return (
-    <div
-      className={`border-t pt-4 ${
-        isDark ? "border-white/10" : "border-gray-200/70"
-      }`}
-    >
+    <div className="space-y-3">
+      <LayerSelect
+        isDark={isDark}
+        label="Layer A"
+        placeholder="Select first layer"
+        value={layerAId}
+        layers={importedLayers}
+        onChange={selectLayer(setLayerAId)}
+      />
+
+      <LayerSelect
+        isDark={isDark}
+        label="Layer B"
+        placeholder="Select second layer"
+        value={layerBId}
+        layers={importedLayers}
+        onChange={selectLayer(setLayerBId)}
+      />
+
       <button
         type="button"
-        onClick={() => setIsExpanded((expanded) => !expanded)}
-        aria-expanded={isExpanded}
-        className={`group flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left backdrop-blur-md transition-all duration-200 ${
-          isDark
-            ? "border-white/10 bg-white/2.5 hover:border-emerald-400/25 hover:bg-white/5"
-            : "border-white/80 bg-white/40 hover:border-emerald-500/25 hover:bg-white/70"
-        }`}
+        onClick={handleRun}
+        disabled={loading || !layerAId || !layerBId}
+        className="w-full rounded-xl border border-emerald-400/30 bg-emerald-500 px-3 py-2.5 text-sm font-semibold text-black shadow-lg shadow-emerald-950/10 transition-all duration-200 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        <span className="min-w-0">
-          <span className="block text-sm font-semibold">
-            Spatial Intersection
-          </span>
-          <span className="mt-1 block text-xs leading-relaxed text-neutral-500">
-            Find overlapping features between two layers
-          </span>
-        </span>
-
-        <span
-          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border text-sm text-emerald-500 transition-all duration-200 ${
-            isDark
-              ? "border-emerald-400/20 bg-emerald-400/6 group-hover:bg-emerald-400/15"
-              : "border-emerald-500/20 bg-emerald-500/5 group-hover:bg-emerald-500/10"
-          }`}
-        >
-          {isExpanded ? "−" : "+"}
-        </span>
+        {loading ? "Running intersection..." : "Run Intersection"}
       </button>
 
-      {isExpanded && (
-        <div className="mt-3 space-y-3">
-          <LayerSelect
-            isDark={isDark}
-            label="Layer A"
-            placeholder="Select first layer"
-            value={layerAId}
-            layers={importedLayers}
-            onChange={selectLayer(setLayerAId)}
-          />
+      {error && (
+        <p className="wrap-break-word rounded-xl border border-red-500/20 bg-red-500/6 p-3 text-xs leading-relaxed text-red-400 backdrop-blur-md">
+          {error}
+        </p>
+      )}
 
-          <LayerSelect
-            isDark={isDark}
-            label="Layer B"
-            placeholder="Select second layer"
-            value={layerBId}
-            layers={importedLayers}
-            onChange={selectLayer(setLayerBId)}
-          />
+      {result && (
+        <div
+          className={`rounded-xl border p-3 backdrop-blur-md ${
+            isDark
+              ? "border-emerald-400/20 bg-emerald-400/4.5"
+              : "border-emerald-500/20 bg-emerald-500/4"
+          }`}
+        >
+          <p className="text-xs font-medium text-neutral-500">
+            Intersection results
+          </p>
 
-          <button
-            type="button"
-            onClick={handleRun}
-            disabled={loading || !layerAId || !layerBId}
-            className="w-full rounded-xl border border-emerald-400/30 bg-emerald-500 px-3 py-2.5 text-sm font-semibold text-black shadow-lg shadow-emerald-950/10 transition-all duration-200 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {loading ? "Running intersection..." : "Run Intersection"}
-          </button>
+          <p className="mt-1 text-2xl font-semibold tracking-tight text-emerald-500">
+            {result.result_count}
+          </p>
 
-          {error && (
-            <p className="wrap-break-word rounded-xl border border-red-500/20 bg-red-500/6 p-3 text-xs leading-relaxed text-red-400 backdrop-blur-md">
-              {error}
+          <p className="mt-1 wrap-break-word text-xs leading-relaxed text-neutral-500">
+            Layer A: {result.layer_a_count} features
+            {" · "}
+            Layer B: {result.layer_b_count} features
+          </p>
+
+          {result.skipped_count > 0 && (
+            <p className="mt-2 text-xs text-amber-500">
+              {result.skipped_count} features skipped
             </p>
           )}
 
-          {result && (
-            <div
-              className={`rounded-xl border p-3 backdrop-blur-md ${
-                isDark
-                  ? "border-emerald-400/20 bg-emerald-400/4.5"
-                  : "border-emerald-500/20 bg-emerald-500/4"
-              }`}
-            >
-              <p className="text-xs font-medium text-neutral-500">
-                Intersection results
-              </p>
-
-              <p className="mt-1 text-2xl font-semibold tracking-tight text-emerald-500">
-                {result.result_count}
-              </p>
-
-              <p className="mt-1 wrap-break-word text-xs leading-relaxed text-neutral-500">
-                Layer A: {result.layer_a_count} features
-                {" · "}
-                Layer B: {result.layer_b_count} features
-              </p>
-
-              {result.skipped_count > 0 && (
-                <p className="mt-2 text-xs text-amber-500">
-                  {result.skipped_count} features skipped
-                </p>
-              )}
-
-              {result.result_count === 0 && (
-                <p className="mt-2 text-xs text-neutral-500">
-                  No overlapping features were found.
-                </p>
-              )}
-            </div>
+          {result.result_count === 0 && (
+            <p className="mt-2 text-xs text-neutral-500">
+              No overlapping features were found.
+            </p>
           )}
-
-          <button
-            type="button"
-            onClick={handleClear}
-            className={`w-full rounded-xl border px-3 py-2 text-sm transition-all duration-200 ${
-              isDark
-                ? "border-white/10 bg-white/2.5 text-neutral-300 hover:border-red-400/25 hover:bg-red-400/6 hover:text-red-300"
-                : "border-gray-200/80 bg-white/40 text-gray-700 hover:border-red-500/25 hover:bg-red-500/4 hover:text-red-600"
-            }`}
-          >
-            Clear Intersection Results
-          </button>
         </div>
       )}
+
+      <button
+        type="button"
+        onClick={handleClear}
+        className={`w-full rounded-xl border px-3 py-2 text-sm transition-all duration-200 ${
+          isDark
+            ? "border-white/10 bg-white/2.5 text-neutral-300 hover:border-red-400/25 hover:bg-red-400/6 hover:text-red-300"
+            : "border-gray-200/80 bg-white/40 text-gray-700 hover:border-red-500/25 hover:bg-red-500/4 hover:text-red-600"
+        }`}
+      >
+        Clear Intersection Results
+      </button>
     </div>
   );
 }

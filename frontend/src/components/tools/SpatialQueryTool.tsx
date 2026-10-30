@@ -7,7 +7,7 @@ import type {
 import { postJSON } from "../../lib/api";
 import LayerSelect from "./LayerSelect";
 import { readLayerFeatures } from "./readLayerFeatures";
-import type { ToolProps } from "./types";
+import type { MapPickProps, ToolProps } from "./types";
 
 type SpatialOperation = "intersects" | "within" | "contains";
 
@@ -21,9 +21,8 @@ interface SpatialQueryResult {
   }[];
 }
 
-interface SpatialQueryToolProps extends ToolProps {
+interface SpatialQueryToolProps extends ToolProps, MapPickProps {
   onLayersChanged: () => void;
-  onMatchedCountChange: (count: number | null) => void;
 }
 
 export default function SpatialQueryTool({
@@ -31,22 +30,18 @@ export default function SpatialQueryTool({
   mapRef,
   importedLayers,
   onLayersChanged,
-  onMatchedCountChange,
+  picker,
 }: SpatialQueryToolProps) {
   const isDark = theme === "dark";
+  const pickingPolygon = picker.isPicking("spatial-query", "polygon");
 
   const [layerId, setLayerId] = useState("");
   const [operation, setOperation] = useState<SpatialOperation>("within");
-  const [result, setResultState] = useState<SpatialQueryResult | null>(null);
+  const [result, setResult] = useState<SpatialQueryResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [targetGeometry, setTargetGeometry] =
     useState<GeoJSONGeometry | null>(null);
-
-  function setResult(next: SpatialQueryResult | null) {
-    setResultState(next);
-    onMatchedCountChange(next?.matched_count ?? null);
-  }
 
   function validateInput(boundaryName: string) {
     if (!layerId || !mapRef.current) {
@@ -59,7 +54,7 @@ export default function SpatialQueryTool({
       return false;
     }
 
-    if (targetGeometry.type !== "Polygon") {
+    if (targetGeometry.type !== "Polygon" && targetGeometry.type !== "MultiPolygon") {
       setError(`The ${boundaryName} boundary must be a polygon.`);
       return false;
     }
@@ -161,6 +156,21 @@ export default function SpatialQueryTool({
     }
   }
 
+  function handleSelectPolygon() {
+    setError("");
+    picker.pickFeature(
+      "spatial-query",
+      "polygon",
+      "Click a polygon on the map to use as the boundary",
+      ["Polygon", "MultiPolygon"],
+      (feature) => {
+        setTargetGeometry(feature.geometry);
+        setResult(null);
+        mapRef.current?.highlightSpatialQueryResults([]);
+      },
+    );
+  }
+
   function handleClear() {
     mapRef.current?.highlightSpatialQueryResults([]);
     setResult(null);
@@ -204,17 +214,39 @@ export default function SpatialQueryTool({
         </select>
       </div>
 
-      <button
-        type="button"
-        onClick={handleUseDrawnPolygon}
-        className={`w-full rounded-xl border px-3 py-2.5 text-sm font-medium backdrop-blur-md transition-all duration-200 ${
-          isDark
-            ? "border-emerald-400/25 bg-emerald-400/4 hover:border-emerald-400/40 hover:bg-emerald-400/10"
-            : "border-emerald-500/25 bg-emerald-500/4 hover:bg-emerald-500/10"
-        }`}
-      >
-        Use Drawn Polygon
-      </button>
+      <div>
+        <p className="mb-1.5 text-xs font-medium text-neutral-500">Boundary polygon</p>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={
+              pickingPolygon
+                ? () => picker.cancel("spatial-query")
+                : handleSelectPolygon
+            }
+            className={`rounded-xl border px-3 py-2.5 text-xs font-medium transition-all ${
+              pickingPolygon
+                ? "border-amber-400/50 bg-amber-400/10 text-amber-500"
+                : isDark
+                  ? "border-emerald-400/25 bg-emerald-400/4 hover:bg-emerald-400/10"
+                  : "border-emerald-500/25 bg-emerald-500/4 hover:bg-emerald-500/10"
+            }`}
+          >
+            {pickingPolygon ? "Cancel selection" : "Select on Map"}
+          </button>
+          <button
+            type="button"
+            onClick={handleUseDrawnPolygon}
+            className={`rounded-xl border px-3 py-2.5 text-xs font-medium transition-all ${
+              isDark
+                ? "border-white/10 bg-white/5 hover:border-emerald-400/30"
+                : "border-gray-200 bg-white/60 hover:border-emerald-500/30"
+            }`}
+          >
+            Use Drawn Polygon
+          </button>
+        </div>
+      </div>
 
       <div
         className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${
