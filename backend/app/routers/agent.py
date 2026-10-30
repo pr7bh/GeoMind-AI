@@ -2,6 +2,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 import httpx
+from app.schemas.analysis import MAX_FEATURES
 from app.services import spatial_analysis
 
 router = APIRouter(prefix="/api/agent", tags=["GIS Agent"])
@@ -16,7 +17,7 @@ class AgentRequest(BaseModel):
     destination: list[float] | None = None
 
     coordinates: list[float] | None = None
-    features: list[dict] | None = None
+    features: list[dict] | None = Field(default=None, max_length=MAX_FEATURES)
     limit: int = Field(default=5, ge=1, le=100)
 
 

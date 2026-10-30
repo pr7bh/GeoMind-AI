@@ -1,5 +1,6 @@
 from pyproj import Geod, Transformer
 from shapely.errors import GEOSException
+from shapely import STRtree
 from shapely.geometry import LineString, Point, Polygon, mapping, shape
 from shapely.ops import transform as shapely_transform
 
@@ -196,6 +197,8 @@ def spatial_intersection(layer_a_features, layer_b_features):
         except (KeyError, ValueError, TypeError, GEOSException):
             skipped += 1
 
+    tree = STRtree([geometry for _, geometry in valid_b])
+
     for index_a, feature_a in enumerate(layer_a_features):
         try:
             if not feature_a.get("geometry"):
@@ -208,10 +211,10 @@ def spatial_intersection(layer_a_features, layer_b_features):
                 skipped += 1
                 continue
 
-            for feature_b, geometry_b in valid_b:
-                if not geometry_a.intersects(geometry_b):
-                    continue
+            candidates = tree.query(geometry_a, predicate="intersects")
 
+            for index_b in sorted(candidates):
+                feature_b, geometry_b = valid_b[index_b]
                 intersection = geometry_a.intersection(geometry_b)
 
                 if intersection.is_empty:
