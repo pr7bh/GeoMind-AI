@@ -1,7 +1,6 @@
 from pyproj import Geod, Transformer
 from shapely.errors import GEOSException
 from shapely.geometry import LineString, Point, Polygon, mapping, shape
-from shapely.ops import transform
 from shapely.ops import transform as shapely_transform
 
 geod = Geod(ellps="WGS84")
@@ -241,20 +240,32 @@ def spatial_intersection(layer_a_features, layer_b_features):
     }
 
 
-def nearest_feature(coordinates, features):
+def _validate_origin(coordinates):
+    if len(coordinates) != 2:
+        raise ValueError("Coordinates must contain longitude and latitude.")
+
     lon, lat = coordinates
 
     if not (-180 <= lon <= 180 and -90 <= lat <= 90):
         raise ValueError("Invalid longitude or latitude.")
 
-    origin = Point(lon, lat)
-    zone = min(60, max(1, int((lon + 180) // 6) + 1))
-    epsg = (32600 if lat >= 0 else 32700) + zone
+    return lon, lat
+
+
+def _feature_distances(coordinates, features):
+    """Return (distance_metres, index, feature) for every valid feature.
+
+    Uses an azimuthal equidistant projection centred on the origin, so
+    distances measured from the origin are accurate anywhere on Earth.
+    """
+    lon, lat = _validate_origin(coordinates)
 
     transformer = Transformer.from_crs(
-        "EPSG:4326", f"EPSG:{epsg}", always_xy=True
+        "EPSG:4326",
+        f"+proj=aeqd +lat_0={lat} +lon_0={lon} +datum=WGS84 +units=m",
+        always_xy=True,
     )
-    origin_metric = shapely_transform(transformer.transform, origin)
+    origin = Point(0, 0)
 
     candidates = []
 
@@ -268,13 +279,17 @@ def nearest_feature(coordinates, features):
             if geometry.is_empty or not geometry.is_valid:
                 continue
 
-            metric_geometry = shapely_transform(transformer.transform, geometry)
-            distance = origin_metric.distance(metric_geometry)
+            projected = shapely_transform(transformer.transform, geometry)
+            candidates.append((origin.distance(projected), index, feature))
 
-            candidates.append((distance, index, feature))
-
-        except (KeyError, ValueError, TypeError, GEOSException):
+        except (AttributeError, KeyError, ValueError, TypeError, GEOSException):
             continue
+
+    return candidates
+
+
+def nearest_feature(coordinates, features):
+    candidates = _feature_distances(coordinates, features)
 
     if not candidates:
         raise ValueError("No valid features were found.")
@@ -296,60 +311,24 @@ def find_top_nearest_features(
     features: list[dict],
     limit: int = 5,
 ):
-    if len(coordinates) != 2:
-        raise ValueError("Coordinates must contain longitude and latitude.")
-
-    longitude, latitude = coordinates
-
-    if not (-180 <= longitude <= 180 and -90 <= latitude <= 90):
-        raise ValueError("Invalid longitude or latitude.")
-
-    transformer = Transformer.from_crs(
-        "EPSG:4326",
-        "EPSG:32643",
-        always_xy=True,
+    candidates = sorted(
+        _feature_distances(coordinates, features),
+        key=lambda item: item[0],
     )
-
-    origin = transform(
-        transformer.transform,
-        shape({
-            "type": "Point",
-            "coordinates": coordinates,
-        }),
-    )
-
-    results = []
-
-    for index, feature in enumerate(features):
-        try:
-            geometry = shape(feature["geometry"])
-
-            if geometry.is_empty or not geometry.is_valid:
-                continue
-
-            projected_geometry = transform(
-                transformer.transform,
-                geometry,
-            )
-
-            distance = origin.distance(projected_geometry)
-
-            results.append({
-                "feature_index": index,
-                "feature": feature,
-                "distance_metres": round(distance, 2),
-                "distance_kilometres": round(distance / 1000, 3),
-            })
-        except (KeyError, TypeError, ValueError):
-            continue
-
-    results.sort(key=lambda item: item["distance_metres"])
 
     return {
         "origin": {
             "type": "Point",
             "coordinates": coordinates,
         },
-        "results": results[:limit],
-        "valid_features_checked": len(results),
+        "results": [
+            {
+                "feature_index": index,
+                "feature": feature,
+                "distance_metres": round(distance, 2),
+                "distance_kilometres": round(distance / 1000, 3),
+            }
+            for distance, index, feature in candidates[:limit]
+        ],
+        "valid_features_checked": len(candidates),
     }
