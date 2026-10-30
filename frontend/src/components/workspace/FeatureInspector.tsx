@@ -11,6 +11,7 @@ import {
   FlaskConical,
 } from "lucide-react";
 import { useState } from "react";
+import { postJSON } from "../../lib/api";
 
 interface FeatureInspectorProps {
   theme: "light" | "dark";
@@ -81,24 +82,14 @@ export default function FeatureInspector({
     try {
       const coordinates = feature.coordinatesWGS84 as number[][][];
 
-      const response = await fetch(
-        "http://127.0.0.1:8000/api/analysis/polygon-area",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            coordinates: coordinates[0],
-          }),
-        },
+      const data = await postJSON<{
+        area_square_metres: number;
+        area_square_kilometres: number;
+      }>(
+        "/api/analysis/polygon-area",
+        { coordinates: coordinates[0] },
+        "Area calculation failed.",
       );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail ?? "Area calculation failed.");
-      }
 
       setBackendArea({
         squareMetres: data.area_square_metres,

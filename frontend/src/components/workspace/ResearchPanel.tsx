@@ -17,17 +17,8 @@ import {
   AlertCircle,
   Route,
 } from "lucide-react";
-
-interface RouteResult {
-  geometry: {
-    type: "LineString";
-    coordinates: number[][];
-  };
-  distance_meters: number;
-  distance_km: number;
-  estimated_duration_minutes: number;
-  route_type: string;
-}
+import { postJSON } from "../../lib/api";
+import type { RouteResult } from "../tools/RoutingTool";
 
 interface AgentResponse {
   success: boolean;
@@ -60,10 +51,6 @@ interface NearestFeaturesInput {
   coordinates: [number, number];
   features: Record<string, unknown>[];
 }
-
-const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000"
-).replace(/\/+$/, "");
 
 export default function ResearchPanel({
   theme,
@@ -130,25 +117,11 @@ export default function ResearchPanel({
         payload.limit = 5;
       }
 
-      const result = await fetch(`${API_BASE_URL}/api/agent/chat`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await result.json();
-
-      if (!result.ok) {
-        throw new Error(
-          typeof data.detail === "string"
-            ? data.detail
-            : "The research request could not be completed.",
-        );
-      }
-
-      const agentResponse = data as AgentResponse;
+      const agentResponse = await postJSON<AgentResponse>(
+        "/api/agent/chat",
+        payload,
+        "The research request could not be completed.",
+      );
       setResponse(agentResponse);
       if (
         agentResponse.success &&
