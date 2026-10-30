@@ -84,10 +84,6 @@ export default function ResearchPanel({
 
   const muted = isDark ? "text-neutral-400" : "text-gray-500";
 
-  const surface = isDark
-    ? "border-neutral-800 bg-neutral-950/70"
-    : "border-gray-200 bg-gray-50";
-
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -500,7 +496,15 @@ export default function ResearchPanel({
               </div>
             )}
             {response.parameters?.result?.results?.map(
-              (item: any, index: number) => (
+              (
+                item: {
+                  feature_index: number;
+                  feature?: import("geojson").Feature;
+                  distance_metres: number;
+                  distance_kilometres?: number | null;
+                },
+                index: number,
+              ) => (
                 <button
                   key={`${item.feature_index}-${index}`}
                   type="button"

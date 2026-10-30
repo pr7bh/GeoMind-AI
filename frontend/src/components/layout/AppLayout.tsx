@@ -42,7 +42,7 @@ export default function AppLayout() {
   const [isResearchOpen, setIsResearchOpen] = useState(false);
   const [isLayersOpen, setIsLayersOpen] = useState(false);
   const [isBaseLayerVisible, setIsBaseLayerVisible] = useState(true);
-  const [baseMap, setBaseMap] = useState<BaseMapType>("dark");
+  const [, setBaseMap] = useState<BaseMapType>("dark");
   const [drawingMode, setDrawingMode] = useState<DrawingMode>("none");
   const [selectedFeature, setSelectedFeature] =
     useState<SelectedFeatureInfo | null>(null);
@@ -2235,8 +2235,8 @@ mapRef.current?.clearFeatureSelection();
         "Nearest feature",
     ),
     geometryType: geometry.type,
-    coordinates: geometry.coordinates,
-    coordinatesWGS84: geometry.coordinates,
+    coordinates: "coordinates" in geometry ? geometry.coordinates : null,
+    coordinatesWGS84: "coordinates" in geometry ? geometry.coordinates : null,
   });
 
   setNearestFeatureDetails({

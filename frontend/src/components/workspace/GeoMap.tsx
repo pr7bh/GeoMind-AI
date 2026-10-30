@@ -1150,7 +1150,11 @@ showRoadRoute(geometry) {
   map.addLayer(layer);
   routeLayerRef.current = layer;
 
-  map.getView().fit(source.getExtent(), {
+  const extent = source.getExtent();
+
+  if (!extent) return;
+
+  map.getView().fit(extent, {
     padding: [100, 100, 100, 100],
     duration: 600,
     maxZoom: 17,
@@ -1190,7 +1194,7 @@ getNearestFeaturesInput() {
 
   return {
     coordinates: [longitude, latitude] as [number, number],
-    features: features as Record<string, unknown>[],
+    features: features as unknown as Record<string, unknown>[],
   };
 },
 
