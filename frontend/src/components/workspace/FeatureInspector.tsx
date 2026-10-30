@@ -24,6 +24,10 @@ interface FeatureInspectorProps {
   onAnalyzePointsInPolygon: () => void;
   pointAnalysisResult: Record<string, any> | null;
   onClearPointAnalysis: () => void;
+  nearestFeatureDetails: {
+    properties: Record<string, unknown>;
+    distanceMetres: number;
+  } | null;
 }
 
 function formatLength(meters: number): string {
@@ -52,6 +56,7 @@ export default function FeatureInspector({
   onAnalyzePointsInPolygon,
   pointAnalysisResult,
   onClearPointAnalysis,
+  nearestFeatureDetails,
 }: FeatureInspectorProps) {
   const isDark = theme === "dark";
 
@@ -430,6 +435,64 @@ export default function FeatureInspector({
               )}
             </section>
           )}
+          {nearestFeatureDetails && (
+  <section>
+    <p
+      className={`mb-3 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+        isDark ? "text-neutral-400" : "text-gray-500"
+      }`}
+    >
+      Nearest-feature analysis
+    </p>
+
+    <div
+      className={`mb-3 rounded-xl border p-3 ${
+        isDark
+          ? "border-emerald-400/20 bg-emerald-400/5"
+          : "border-emerald-200 bg-emerald-50"
+      }`}
+    >
+      <p className="text-xs text-neutral-500">Distance from origin</p>
+      <p className="mt-1 text-xl font-semibold text-emerald-500">
+        {nearestFeatureDetails.distanceMetres >= 1000
+          ? `${(
+              nearestFeatureDetails.distanceMetres / 1000
+            ).toFixed(3)} km`
+          : `${nearestFeatureDetails.distanceMetres.toFixed(2)} m`}
+      </p>
+    </div>
+
+    <div className="space-y-2">
+      {Object.entries(nearestFeatureDetails.properties).map(
+        ([key, value]) => (
+          <div
+            key={key}
+            className={`rounded-lg border p-3 ${
+              isDark
+                ? "border-white/8 bg-white/[0.025]"
+                : "border-gray-200 bg-white/60"
+            }`}
+          >
+            <p className="text-[11px] text-neutral-500">{key}</p>
+            <p className="mt-1 break-words text-xs">
+              {value == null
+                ? "—"
+                : typeof value === "object"
+                  ? JSON.stringify(value)
+                  : String(value)}
+            </p>
+          </div>
+        ),
+      )}
+
+      {Object.keys(nearestFeatureDetails.properties).length === 0 && (
+        <p className="text-xs text-neutral-500">
+          No additional properties are available for this feature.
+        </p>
+      )}
+    </div>
+  </section>
+)}
 
           {/* Buffer analysis */}
           {(feature.geometryType === "Point" ||

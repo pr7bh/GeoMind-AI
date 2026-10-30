@@ -64,10 +64,19 @@ export default function AppHeader({ theme }: AppHeaderProps) {
           }`}
           title="Workspace status"
         >
-          <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-30" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-          </span>
+          <span className="relative flex h-2.5 w-2.5 items-center justify-center">
+  {/* Outer soft glow */}
+  <span className="absolute h-5 w-5 rounded-full bg-emerald-400/20 blur-md" />
+
+  {/* Animated pulse */}
+  <span className="absolute h-4 w-4 animate-ping rounded-full bg-emerald-400/40" />
+
+  {/* Inner glow */}
+  <span className="absolute h-3 w-3 rounded-full bg-emerald-400/40 blur-[3px]" />
+
+  {/* Bright solid dot */}
+  <span className="relative h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_3px_rgba(52,211,153,0.7),0_0_18px_5px_rgba(16,185,129,0.35)]" />
+</span>
 
           <span
             className={`text-[10px] font-medium ${

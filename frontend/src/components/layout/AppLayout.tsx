@@ -46,6 +46,11 @@ export default function AppLayout() {
   const [drawingMode, setDrawingMode] = useState<DrawingMode>("none");
   const [selectedFeature, setSelectedFeature] =
     useState<SelectedFeatureInfo | null>(null);
+    const [nearestFeatureDetails, setNearestFeatureDetails] =
+  useState<{
+    properties: Record<string, unknown>;
+    distanceMetres: number;
+  } | null>(null);
   const mapRef = useRef<GeoMapHandle>(null);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [pointAnalysisResult, setPointAnalysisResult] = useState<Record<
@@ -84,6 +89,349 @@ export default function AppLayout() {
   const [intersectionLoading, setIntersectionLoading] = useState(false);
   const [intersectionError, setIntersectionError] = useState("");
   const [isIntersectionExpanded, setIsIntersectionExpanded] = useState(false);
+  const [nearestPickActive, setNearestPickActive] = useState(false);
+  const [nearestOrigin, setNearestOrigin] = useState<[number, number] | null>(
+    null,
+  );
+  const [nearestFeatureLoading, setNearestFeatureLoading] = useState(false);
+  const [nearestFeatureError, setNearestFeatureError] = useState("");
+
+  const [nearestFeatureResult, setNearestFeatureResult] = useState<{
+    nearest_feature: GeoJSONFeature;
+    feature_index: number;
+    distance_metres: number;
+    distance_kilometres: number;
+    valid_features_checked: number;
+  } | null>(null);
+  const [nearestLimit, setNearestLimit] = useState(3);
+
+  const [topNearestResult, setTopNearestResult] = useState<{
+    results: {
+      feature_index: number;
+      feature: GeoJSONFeature;
+      distance_metres: number;
+      distance_kilometres: number;
+    }[];
+    valid_features_checked: number;
+  } | null>(null);
+  const [heatmapLayerId, setHeatmapLayerId] = useState("");
+  const [heatmapEnabled, setHeatmapEnabled] = useState(false);
+  const [heatmapRadius, setHeatmapRadius] = useState(18);
+  const [heatmapBlur, setHeatmapBlur] = useState(15);
+  const [heatmapError, setHeatmapError] = useState("");
+  const [routeStart, setRouteStart] = useState<[number, number] | null>(null);
+  const [routeDestination, setRouteDestination] = useState<
+    [number, number] | null
+  >(null);
+  const [routePickTarget, setRoutePickTarget] = useState<
+    "start" | "destination" | null
+  >(null);
+  const [routeDistance, setRouteDistance] = useState<number | null>(null);
+  const [routeError, setRouteError] = useState("");
+  const [roadRouteResult, setRoadRouteResult] = useState<{
+    distance_km: number;
+    estimated_duration_minutes: number;
+  } | null>(null);
+
+  const [roadRouteLoading, setRoadRouteLoading] = useState(false);
+
+  async function handleCalculateRoadRoute() {
+    if (!routeStart || !routeDestination) {
+      setRouteError("Please select both a start point and a destination.");
+      return;
+    }
+
+    try {
+      setRoadRouteLoading(true);
+      setRouteError("");
+      setRoadRouteResult(null);
+
+      const response = await fetch("http://127.0.0.1:8000/api/routing/route", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          start: routeStart,
+          destination: routeDestination,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Road routing failed.");
+      }
+
+      mapRef.current?.showRoadRoute(data.geometry);
+
+      setRoadRouteResult({
+        distance_km: data.distance_km,
+        estimated_duration_minutes: data.estimated_duration_minutes,
+      });
+    } catch (error) {
+      setRouteError(
+        error instanceof Error
+          ? error.message
+          : "Unable to calculate the road route.",
+      );
+    } finally {
+      setRoadRouteLoading(false);
+    }
+  }
+
+  function handlePickRoutePoint(target: "start" | "destination") {
+    if (!mapRef.current) {
+      setRouteError("Map is not ready yet.");
+      return;
+    }
+
+    // Prevent routing clicks from conflicting with nearest-feature selection.
+    mapRef.current.setNearestFeaturePickMode(null);
+    setNearestPickActive(false);
+    mapRef.current.setDrawingMode("none");
+    setDrawingMode("none");
+
+    setRouteError("");
+    setRouteDistance(null);
+    setRoutePickTarget(target);
+
+    mapRef.current.clearRouteDistance();
+
+    mapRef.current.setRoutePickMode((coordinates) => {
+      if (target === "start") {
+        setRouteStart(coordinates);
+      } else {
+        setRouteDestination(coordinates);
+      }
+
+      setRoutePickTarget(null);
+    });
+  }
+
+  function handleCalculateRouteDistance() {
+    if (!routeStart || !routeDestination) {
+      setRouteError("Please select both a start point and a destination.");
+      return;
+    }
+
+    try {
+      const distance = mapRef.current?.showRouteDistance(
+        routeStart,
+        routeDestination,
+      );
+
+      if (distance === undefined || !Number.isFinite(distance)) {
+        throw new Error("Unable to calculate the distance.");
+      }
+
+      setRouteDistance(distance);
+      setRouteError("");
+      setRoutePickTarget(null);
+    } catch (error) {
+      setRouteError(
+        error instanceof Error
+          ? error.message
+          : "Unable to calculate route distance.",
+      );
+    }
+  }
+
+  function handleClearRoute() {
+    mapRef.current?.clearRouteDistance();
+    mapRef.current?.setRoutePickMode(null);
+
+    setRouteStart(null);
+    setRouteDestination(null);
+    setRoutePickTarget(null);
+    setRouteDistance(null);
+    setRouteError("");
+    setRoadRouteResult(null);
+  }
+
+  function handleToggleHeatmap(enabled: boolean) {
+    try {
+      setHeatmapError("");
+
+      if (!enabled) {
+        mapRef.current?.setHeatmap(null, heatmapRadius, heatmapBlur);
+        setHeatmapEnabled(false);
+        return;
+      }
+
+      if (!heatmapLayerId) {
+        setHeatmapError("Please select an imported layer.");
+        return;
+      }
+
+      mapRef.current?.setHeatmap(heatmapLayerId, heatmapRadius, heatmapBlur);
+
+      setHeatmapEnabled(true);
+    } catch (error) {
+      setHeatmapEnabled(false);
+      setHeatmapError(
+        error instanceof Error ? error.message : "Unable to create heatmap.",
+      );
+    }
+  }
+
+  async function handleRunTopNearestFeatures() {
+    if (!spatialQueryLayerId || !mapRef.current) {
+      setNearestFeatureError("Please select a source layer.");
+      return;
+    }
+
+    if (!nearestOrigin) {
+      setNearestFeatureError("Pick a location on the map first.");
+      return;
+    }
+
+    const geoJSONText = mapRef.current.getImportedGeoJSON(spatialQueryLayerId);
+
+    if (!geoJSONText) {
+      setNearestFeatureError("Unable to read the selected layer.");
+      return;
+    }
+
+    try {
+      setNearestFeatureLoading(true);
+      setNearestFeatureError("");
+      setTopNearestResult(null);
+
+      const collection = JSON.parse(geoJSONText) as GeoJSONFeatureCollection;
+
+      if (collection.features.length === 0) {
+        throw new Error("The selected layer contains no features.");
+      }
+
+      const response = await fetch(
+        "http://127.0.0.1:8000/api/analysis/nearest-features",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            coordinates: nearestOrigin,
+            features: collection.features,
+            limit: nearestLimit,
+          }),
+        },
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Top nearest features analysis failed.");
+      }
+
+      setTopNearestResult(data);
+
+      mapRef.current?.highlightNearestFeatures(
+        nearestOrigin,
+        data.results.map((item: { feature: GeoJSONFeature }) => item.feature),
+      );
+    } catch (error) {
+      setNearestFeatureError(
+        error instanceof Error
+          ? error.message
+          : "Top nearest features analysis failed.",
+      );
+    } finally {
+      setNearestFeatureLoading(false);
+    }
+  }
+
+  function handlePickNearestOrigin() {
+    setNearestFeatureResult(null);
+    setNearestFeatureError("");
+    setNearestPickActive(true);
+
+    mapRef.current?.clearNearestFeatureHighlight();
+
+    mapRef.current?.setNearestFeaturePickMode((coordinates) => {
+      setNearestOrigin(coordinates);
+      setNearestPickActive(false);
+      setNearestFeatureError("");
+    });
+  }
+
+  async function handleRunNearestFeature() {
+    if (!spatialQueryLayerId || !mapRef.current) {
+      setNearestFeatureError("Please select a source layer.");
+      return;
+    }
+
+    if (!nearestOrigin) {
+      setNearestFeatureError("Pick a location on the map first.");
+      return;
+    }
+
+    const geoJSONText = mapRef.current.getImportedGeoJSON(spatialQueryLayerId);
+
+    if (!geoJSONText) {
+      setNearestFeatureError("Unable to read the selected layer.");
+      return;
+    }
+
+    try {
+      setNearestFeatureLoading(true);
+      setNearestFeatureError("");
+      setNearestFeatureResult(null);
+
+      const collection = JSON.parse(geoJSONText) as GeoJSONFeatureCollection;
+
+      if (collection.features.length === 0) {
+        throw new Error("The selected layer contains no features.");
+      }
+
+      const response = await fetch(
+        "http://127.0.0.1:8000/api/analysis/nearest-feature",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            coordinates: nearestOrigin,
+            features: collection.features,
+          }),
+        },
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Nearest feature analysis failed.");
+      }
+
+      setNearestFeatureResult(data);
+
+      mapRef.current?.highlightNearestFeature(
+        nearestOrigin,
+        data.nearest_feature,
+      );
+    } catch (error) {
+      setNearestFeatureError(
+        error instanceof Error
+          ? error.message
+          : "Nearest feature analysis failed.",
+      );
+    } finally {
+      setNearestFeatureLoading(false);
+    }
+  }
+
+  function handleClearNearestFeature() {
+    mapRef.current?.setNearestFeaturePickMode(null);
+    mapRef.current?.clearNearestFeatureHighlight();
+
+    setNearestPickActive(false);
+    setNearestOrigin(null);
+    setNearestFeatureResult(null);
+    setNearestFeatureError("");
+    setTopNearestResult(null);
+  }
 
   const handleRunIntersection = async () => {
     if (!intersectionLayerAId || !intersectionLayerBId) {
@@ -494,8 +842,11 @@ export default function AppLayout() {
   }, [theme]);
 
   useEffect(() => {
-    mapRef.current?.setOnFeatureSelect(setSelectedFeature);
-  }, []);
+  mapRef.current?.setOnFeatureSelect((feature) => {
+    setSelectedFeature(feature);
+    setNearestFeatureDetails(null);
+  });
+}, []);
 
   const isDark = theme === "dark";
 
@@ -593,6 +944,7 @@ export default function AppLayout() {
               />
             </div>
           </div>
+
           {/* Spatial Query Builder */}
 
           {/* Spatial Query Builder — Glass UI */}
@@ -711,6 +1063,497 @@ export default function AppLayout() {
                       ))}
                     </select>
                   </div>
+                  {/* Nearest Feature Analysis */}
+                  <div
+                    className={`border-t pt-4 ${
+                      isDark ? "border-white/10" : "border-gray-200/70"
+                    }`}
+                  >
+                    <div className="mb-3">
+                      <h4 className="text-sm font-semibold">Nearest Feature</h4>
+                      <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+                        Find the closest feature in the selected layer.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handlePickNearestOrigin}
+                      className={`w-full rounded-xl border px-3 py-2.5 text-sm font-medium transition-all ${
+                        nearestPickActive
+                          ? "border-amber-400/40 bg-amber-400/10 text-amber-500"
+                          : isDark
+                            ? "border-white/10 bg-white/5 hover:border-emerald-400/30"
+                            : "border-gray-200 bg-white/60 hover:border-emerald-500/30"
+                      }`}
+                    >
+                      {nearestPickActive
+                        ? "Click a location on the map..."
+                        : nearestOrigin
+                          ? "Choose Another Location"
+                          : "Pick Location on Map"}
+                    </button>
+
+                    {nearestOrigin && (
+                      <p className="mt-2 break-all text-xs text-neutral-500">
+                        Location: {nearestOrigin[1].toFixed(5)},{" "}
+                        {nearestOrigin[0].toFixed(5)}
+                      </p>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={handleRunNearestFeature}
+                      disabled={
+                        nearestFeatureLoading ||
+                        !spatialQueryLayerId ||
+                        !nearestOrigin ||
+                        nearestPickActive
+                      }
+                      className="mt-3 w-full rounded-xl border border-emerald-400/30 bg-emerald-500 px-3 py-2.5 text-sm font-semibold text-black transition-all hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {nearestFeatureLoading
+                        ? "Finding nearest feature..."
+                        : "Find Nearest Feature"}
+                    </button>
+
+                    {nearestFeatureError && (
+                      <p className="mt-3 break-words rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-400">
+                        {nearestFeatureError}
+                      </p>
+                    )}
+
+                    {nearestFeatureResult && (
+                      <div
+                        className={`mt-3 rounded-xl border p-3 ${
+                          isDark
+                            ? "border-emerald-400/20 bg-emerald-400/5"
+                            : "border-emerald-500/20 bg-emerald-500/5"
+                        }`}
+                      >
+                        <p className="text-xs text-neutral-500">
+                          Nearest feature distance
+                        </p>
+
+                        <p className="mt-1 text-2xl font-semibold text-emerald-500">
+                          {nearestFeatureResult.distance_metres < 1000
+                            ? `${nearestFeatureResult.distance_metres.toFixed(2)} m`
+                            : `${nearestFeatureResult.distance_kilometres.toFixed(3)} km`}
+                        </p>
+
+                        <p className="mt-2 break-words text-xs text-neutral-500">
+                          {String(
+                            nearestFeatureResult.nearest_feature.properties
+                              ?.name ??
+                              nearestFeatureResult.nearest_feature.properties
+                                ?.Name ??
+                              `Feature ${nearestFeatureResult.feature_index + 1}`,
+                          )}
+                        </p>
+
+                        <p className="mt-1 text-xs text-neutral-500">
+                          {nearestFeatureResult.valid_features_checked} valid
+                          features checked
+                        </p>
+                      </div>
+                    )}
+                    <div
+                      className={`mt-4 border-t pt-4 ${
+                        isDark ? "border-white/10" : "border-gray-200/70"
+                      }`}
+                    >
+                      <h4 className="text-sm font-semibold">
+                        Top N Nearest Features
+                      </h4>
+
+                      <p className="mt-1 text-xs text-neutral-500">
+                        Rank the closest features to your selected location.
+                      </p>
+
+                      <label className="mt-3 block text-xs font-medium text-neutral-500">
+                        Number of features
+                      </label>
+
+                      <select
+                        value={nearestLimit}
+                        onChange={(event) =>
+                          setNearestLimit(Number(event.target.value))
+                        }
+                        className={`mt-1.5 w-full rounded-xl border p-2.5 text-sm ${
+                          isDark
+                            ? "border-white/10 bg-neutral-900 text-white"
+                            : "border-gray-200 bg-white text-black"
+                        }`}
+                      >
+                        <option value={3}>Top 3</option>
+                        <option value={5}>Top 5</option>
+                        <option value={10}>Top 10</option>
+                      </select>
+
+                      <button
+                        type="button"
+                        onClick={handleRunTopNearestFeatures}
+                        disabled={
+                          nearestFeatureLoading ||
+                          !spatialQueryLayerId ||
+                          !nearestOrigin ||
+                          nearestPickActive
+                        }
+                        className="mt-3 w-full rounded-xl bg-sky-500 px-3 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {nearestFeatureLoading
+                          ? "Finding nearest features..."
+                          : `Find Top ${nearestLimit} Features`}
+                      </button>
+
+                      {topNearestResult && (
+                        <div className="mt-3 space-y-2">
+                          <p className="text-xs text-neutral-500">
+                            {topNearestResult.results.length} features returned
+                            · {topNearestResult.valid_features_checked} checked
+                          </p>
+
+                          {topNearestResult.results.map((item, index) => (
+                            <div
+                              key={`${item.feature_index}-${index}`}
+                              className={`rounded-xl border p-3 ${
+                                isDark
+                                  ? "border-white/10 bg-white/5"
+                                  : "border-gray-200 bg-white/70"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-semibold">
+                                  #{index + 1}{" "}
+                                  {String(
+                                    item.feature.properties?.name ??
+                                      item.feature.properties?.Name ??
+                                      `Feature ${item.feature_index + 1}`,
+                                  )}
+                                </span>
+
+                                <span className="shrink-0 text-xs font-semibold text-sky-500">
+                                  {item.distance_metres < 1000
+                                    ? `${item.distance_metres.toFixed(2)} m`
+                                    : `${item.distance_kilometres.toFixed(3)} km`}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleClearNearestFeature}
+                      className={`mt-2 w-full rounded-xl border px-3 py-2 text-sm transition-all ${
+                        isDark
+                          ? "border-white/10 bg-white/5 hover:border-red-400/25 hover:text-red-300"
+                          : "border-gray-200 bg-white/60 hover:border-red-500/25 hover:text-red-600"
+                      }`}
+                    >
+                      Clear Nearest Feature
+                    </button>
+                  </div>
+                  <section
+                    className={`mt-4 rounded-xl border p-4 ${
+                      isDark
+                        ? "border-white/10 bg-white/[0.03]"
+                        : "border-gray-200 bg-gray-50"
+                    }`}
+                  >
+                    <div className="mb-3">
+                      <h3 className="text-sm font-semibold">
+                        Heatmap & Density
+                      </h3>
+                      <p className="mt-1 text-xs text-neutral-500">
+                        Visualize concentrations of geographic points.
+                      </p>
+                    </div>
+
+                    <label className="mb-1 block text-xs font-medium">
+                      Source layer
+                    </label>
+
+                    <select
+                      value={heatmapLayerId}
+                      onChange={(event) => {
+                        const layerId = event.target.value;
+                        setHeatmapLayerId(layerId);
+
+                        if (heatmapEnabled && layerId) {
+                          try {
+                            setHeatmapError("");
+                            mapRef.current?.setHeatmap(
+                              layerId,
+                              heatmapRadius,
+                              heatmapBlur,
+                            );
+                          } catch (error) {
+                            setHeatmapEnabled(false);
+                            setHeatmapError(
+                              error instanceof Error
+                                ? error.message
+                                : "Unable to update heatmap.",
+                            );
+                          }
+                        }
+                      }}
+                      className={`w-full rounded-lg border p-2 text-sm ${
+                        isDark
+                          ? "border-white/10 bg-neutral-950 text-white"
+                          : "border-gray-200 bg-white text-gray-900"
+                      }`}
+                    >
+                      <option value="">Select imported layer</option>
+                      {importedLayers.map((layer) => (
+                        <option key={layer.id} value={layer.id}>
+                          {layer.name} ({layer.count} features)
+                        </option>
+                      ))}
+                    </select>
+
+                    <div className="mt-4">
+                      <div className="mb-2 flex justify-between text-xs">
+                        <label>Radius</label>
+                        <span>{heatmapRadius}px</span>
+                      </div>
+
+                      <input
+                        type="range"
+                        min={5}
+                        max={50}
+                        value={heatmapRadius}
+                        onChange={(event) => {
+                          const radius = Number(event.target.value);
+                          setHeatmapRadius(radius);
+
+                          if (heatmapEnabled && heatmapLayerId) {
+                            try {
+                              mapRef.current?.setHeatmap(
+                                heatmapLayerId,
+                                radius,
+                                heatmapBlur,
+                              );
+                            } catch (error) {
+                              setHeatmapError(
+                                error instanceof Error
+                                  ? error.message
+                                  : "Unable to update heatmap.",
+                              );
+                            }
+                          }
+                        }}
+                        className="w-full accent-emerald-500"
+                      />
+                    </div>
+
+                    <div className="mt-4">
+                      <div className="mb-2 flex justify-between text-xs">
+                        <label>Blur</label>
+                        <span>{heatmapBlur}px</span>
+                      </div>
+
+                      <input
+                        type="range"
+                        min={0}
+                        max={40}
+                        value={heatmapBlur}
+                        onChange={(event) => {
+                          const blur = Number(event.target.value);
+                          setHeatmapBlur(blur);
+
+                          if (heatmapEnabled && heatmapLayerId) {
+                            try {
+                              mapRef.current?.setHeatmap(
+                                heatmapLayerId,
+                                heatmapRadius,
+                                blur,
+                              );
+                            } catch (error) {
+                              setHeatmapError(
+                                error instanceof Error
+                                  ? error.message
+                                  : "Unable to update heatmap.",
+                              );
+                            }
+                          }
+                        }}
+                        className="w-full accent-emerald-500"
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleToggleHeatmap(!heatmapEnabled)}
+                      className={`mt-4 w-full rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                        heatmapEnabled
+                          ? "border border-rose-500/30 bg-rose-500/10 text-rose-500"
+                          : "bg-emerald-600 text-white hover:bg-emerald-500"
+                      }`}
+                    >
+                      {heatmapEnabled ? "Disable Heatmap" : "Enable Heatmap"}
+                    </button>
+
+                    {heatmapError && (
+                      <p className="mt-2 text-xs text-rose-500">
+                        {heatmapError}
+                      </p>
+                    )}
+                  </section>
+                  {/* Routing & Distance Analysis */}
+                  <section
+                    className={`rounded-xl border p-4 ${
+                      isDark
+                        ? "border-white/10 bg-white/[0.03]"
+                        : "border-gray-200 bg-gray-50"
+                    }`}
+                  >
+                    <div className="mb-3">
+                      <h4 className="text-sm font-semibold">
+                        Routing & Distance Analysis
+                      </h4>
+                      <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+                        Select two map locations to measure their straight-line
+                        distance.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handlePickRoutePoint("start")}
+                      className={`w-full rounded-xl border px-3 py-2.5 text-sm font-medium transition-all ${
+                        routePickTarget === "start"
+                          ? "border-amber-400/40 bg-amber-400/10 text-amber-500"
+                          : isDark
+                            ? "border-white/10 bg-white/5 hover:border-amber-400/30"
+                            : "border-gray-200 bg-white/60 hover:border-amber-400/50"
+                      }`}
+                    >
+                      {routePickTarget === "start"
+                        ? "Click the map to set start..."
+                        : routeStart
+                          ? "Change Start Point"
+                          : "Set Start Point"}
+                    </button>
+
+                    {routeStart && (
+                      <p className="mt-2 break-words text-xs text-neutral-500">
+                        Start: {routeStart[1].toFixed(5)},{" "}
+                        {routeStart[0].toFixed(5)}
+                      </p>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => handlePickRoutePoint("destination")}
+                      className={`mt-3 w-full rounded-xl border px-3 py-2.5 text-sm font-medium transition-all ${
+                        routePickTarget === "destination"
+                          ? "border-violet-400/40 bg-violet-400/10 text-violet-400"
+                          : isDark
+                            ? "border-white/10 bg-white/5 hover:border-violet-400/30"
+                            : "border-gray-200 bg-white/60 hover:border-violet-400/50"
+                      }`}
+                    >
+                      {routePickTarget === "destination"
+                        ? "Click the map to set destination..."
+                        : routeDestination
+                          ? "Change Destination"
+                          : "Set Destination"}
+                    </button>
+
+                    {routeDestination && (
+                      <p className="mt-2 break-words text-xs text-neutral-500">
+                        Destination: {routeDestination[1].toFixed(5)},{" "}
+                        {routeDestination[0].toFixed(5)}
+                      </p>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={handleCalculateRouteDistance}
+                      disabled={
+                        !routeStart ||
+                        !routeDestination ||
+                        routePickTarget !== null
+                      }
+                      className="mt-4 w-full rounded-xl border border-emerald-400/30 bg-emerald-500 px-3 py-2.5 text-sm font-semibold text-black transition-all hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Calculate Distance
+                    </button>
+
+                    {routeDistance !== null && (
+                      <div
+                        className={`mt-3 rounded-xl border p-3 ${
+                          isDark
+                            ? "border-violet-400/20 bg-violet-400/5"
+                            : "border-violet-500/20 bg-violet-500/5"
+                        }`}
+                      >
+                        <p className="text-xs text-neutral-500">
+                          Straight-line distance
+                        </p>
+                        <p className="mt-1 text-xl font-semibold text-violet-400">
+                          {routeDistance >= 1000
+                            ? `${(routeDistance / 1000).toFixed(3)} km`
+                            : `${routeDistance.toFixed(2)} m`}
+                        </p>
+                      </div>
+                    )}
+
+                    {routeError && (
+                      <p className="mt-3 break-words rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-400">
+                        {routeError}
+                      </p>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={handleCalculateRoadRoute}
+                      disabled={
+                        roadRouteLoading ||
+                        !routeStart ||
+                        !routeDestination ||
+                        routePickTarget !== null
+                      }
+                      className="mt-2 w-full rounded-xl bg-violet-500 px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {roadRouteLoading
+                        ? "Calculating road route..."
+                        : "Calculate Road Route"}
+                    </button>
+
+                    {roadRouteResult && (
+                      <div className="mt-3 rounded-xl border border-violet-500/20 bg-violet-500/5 p-3">
+                        <p className="text-xs text-neutral-500">
+                          Road distance
+                        </p>
+                        <p className="text-lg font-semibold">
+                          {roadRouteResult.distance_km.toFixed(2)} km
+                        </p>
+
+                        <p className="mt-2 text-xs text-neutral-500">
+                          Estimated driving time
+                        </p>
+                        <p className="text-sm font-medium">
+                          {roadRouteResult.estimated_duration_minutes} min
+                        </p>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={handleClearRoute}
+                      className={`mt-3 w-full rounded-xl border px-3 py-2 text-sm transition-all ${
+                        isDark
+                          ? "border-white/10 bg-white/5 hover:border-red-400/25 hover:text-red-300"
+                          : "border-gray-200 bg-white/60 hover:border-red-500/25 hover:text-red-600"
+                      }`}
+                    >
+                      Clear Route
+                    </button>
+                  </section>
 
                   {/* Spatial operation */}
                   <div>
@@ -1075,12 +1918,14 @@ export default function AppLayout() {
                   feature={selectedFeature}
                   onClose={() => {
                     setSelectedFeature(null);
-                    mapRef.current?.clearFeatureSelection();
+setNearestFeatureDetails(null);
+mapRef.current?.clearFeatureSelection();
                   }}
                   onCreateBuffer={handleCreateBuffer}
                   onAnalyzePointsInPolygon={handleAnalyzePointsInPolygon}
                   onClearPointAnalysis={handleClearPointAnalysis}
                   pointAnalysisResult={pointAnalysisResult}
+                  nearestFeatureDetails={nearestFeatureDetails}
                 />
               </div>
             </div>
@@ -1181,8 +2026,7 @@ export default function AppLayout() {
                 </div> */}
 
                 {/* Base map visibility */}
-                <div
-                >
+                <div>
                   <label
                     className={`flex cursor-pointer items-center gap-3 rounded-xl p-2 text-sm transition-colors ${
                       isDark ? "hover:bg-white/[0.05]" : "hover:bg-white/60"
@@ -1365,6 +2209,41 @@ export default function AppLayout() {
           <ResearchPanel
             theme={theme}
             onClose={() => setIsResearchOpen(false)}
+            routeStart={routeStart}
+            routeDestination={routeDestination}
+            onRouteResult={(route) => {
+              mapRef.current?.showRoadRoute(route.geometry);
+            }}
+            getNearestFeaturesInput={() =>
+              mapRef.current?.getNearestFeaturesInput() ?? null
+            }
+            onNearestFeaturesResult={(origin, features) => {
+              mapRef.current?.highlightNearestFeatures(origin, features);
+            }}
+            onNearestFeatureSelect={(origin, feature, distanceMetres) => {
+  mapRef.current?.highlightNearestFeature(origin, feature);
+
+  const geometry = feature.geometry;
+
+  if (!geometry) return;
+
+  setSelectedFeature({
+    id: String(
+      feature.id ??
+        feature.properties?.name ??
+        feature.properties?.Name ??
+        "Nearest feature",
+    ),
+    geometryType: geometry.type,
+    coordinates: geometry.coordinates,
+    coordinatesWGS84: geometry.coordinates,
+  });
+
+  setNearestFeatureDetails({
+    properties: feature.properties ?? {},
+    distanceMetres,
+  });
+}}
           />
         )}
 

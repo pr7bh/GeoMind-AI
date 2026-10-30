@@ -3,10 +3,9 @@ import type { Feature as GeoJSONFeature } from "geojson";
 import Map from "ol/Map";
 import View from "ol/View";
 import TileLayer from "ol/layer/Tile";
-import OSM from "ol/source/OSM";
 import XYZ from "ol/source/XYZ";
 import "ol/ol.css";
-import { fromLonLat } from "ol/proj";
+import { fromLonLat, toLonLat, transform } from "ol/proj";
 import Feature from "ol/Feature";
 import Point from "ol/geom/Point";
 import VectorLayer from "ol/layer/Vector";
@@ -18,9 +17,10 @@ import Select from "ol/interaction/Select";
 import { click } from "ol/events/condition";
 import LineString from "ol/geom/LineString";
 import Polygon from "ol/geom/Polygon";
-import { getArea, getLength } from "ol/sphere";
+import { getArea, getLength, getDistance } from "ol/sphere";
 import GeoJSON from "ol/format/GeoJSON";
 import { isEmpty } from "ol/extent";
+import HeatmapLayer from "ol/layer/Heatmap";
 
 export interface SelectedFeatureInfo {
   id: string;
@@ -86,6 +86,39 @@ export interface GeoMapHandle {
   getImportedGeoJSON: (layerId: string) => string | null;
   highlightSpatialQueryResults: (features: GeoJSONFeature[]) => void;
   addClipResultGeoJSON: (geojson: string, layerName?: string) => void;
+  setNearestFeaturePickMode: (
+    callback: ((coordinates: [number, number]) => void) | null,
+  ) => void;
+  highlightNearestFeature: (
+    origin: [number, number],
+    feature: GeoJSONFeature,
+  ) => void;
+  clearNearestFeatureHighlight: () => void;
+  highlightNearestFeatures: (
+    origin: [number, number],
+    features: GeoJSONFeature[],
+  ) => void;
+  setHeatmap: (layerId: string | null, radius: number, blur: number) => void;
+  setRoutePickMode: (
+    callback: ((coordinates: [number, number]) => void) | null,
+  ) => void;
+
+  showRouteDistance: (
+    start: [number, number],
+    destination: [number, number],
+  ) => number;
+
+  clearRouteDistance: () => void;
+  showRoadRoute: (
+  geometry: {
+    type: "LineString";
+    coordinates: number[][];
+  },
+) => void;
+getNearestFeaturesInput: () => {
+  coordinates: [number, number];
+  features: Record<string, unknown>[];
+} | null;
 }
 
 const INITIAL_CENTER: [number, number] = [0, 0];
@@ -112,6 +145,16 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
   const pointHighlightLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
   const spatialQueryHighlightLayerRef =
     useRef<VectorLayer<VectorSource> | null>(null);
+  const nearestFeatureLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
+  const nearestOriginLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
+
+  const nearestFeaturePickCallbackRef = useRef<
+    ((coordinates: [number, number]) => void) | null
+  >(null);
+  const routePickCallbackRef = useRef<
+    ((coordinates: [number, number]) => void) | null
+  >(null);
+  const routeLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
 
   const onFeatureSelectRef = useRef<
     ((feature: SelectedFeatureInfo | null) => void) | null
@@ -681,6 +724,476 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
         });
       }
     },
+    setNearestFeaturePickMode(callback) {
+      nearestFeaturePickCallbackRef.current = callback;
+    },
+
+    highlightNearestFeature(origin, feature) {
+      const map = mapInstance.current;
+      if (!map) return;
+
+      // Clear previous nearest-feature highlights.
+      if (nearestFeatureLayerRef.current) {
+        map.removeLayer(nearestFeatureLayerRef.current);
+        nearestFeatureLayerRef.current = null;
+      }
+
+      if (nearestOriginLayerRef.current) {
+        map.removeLayer(nearestOriginLayerRef.current);
+        nearestOriginLayerRef.current = null;
+      }
+
+      const format = new GeoJSON();
+
+      const nearestFeatures = format.readFeatures(
+        {
+          type: "FeatureCollection",
+          features: [feature],
+        },
+        {
+          dataProjection: "EPSG:4326",
+          featureProjection: "EPSG:3857",
+        },
+      );
+
+      if (nearestFeatures.length === 0) {
+        throw new Error("The nearest feature could not be displayed.");
+      }
+
+      const nearestSource = new VectorSource({
+        features: nearestFeatures,
+      });
+
+      const nearestLayer = new VectorLayer({
+        source: nearestSource,
+        zIndex: 120,
+        style: new Style({
+          fill: new Fill({ color: "rgba(16, 185, 129, 0.25)" }),
+          stroke: new Stroke({ color: "#10b981", width: 4 }),
+          image: new Circle({
+            radius: 10,
+            fill: new Fill({ color: "#10b981" }),
+            stroke: new Stroke({ color: "#ffffff", width: 2 }),
+          }),
+        }),
+      });
+
+      const originSource = new VectorSource({
+        features: [
+          new Feature({
+            geometry: new Point(fromLonLat(origin)),
+          }),
+        ],
+      });
+
+      const originLayer = new VectorLayer({
+        source: originSource,
+        zIndex: 121,
+        style: new Style({
+          image: new Circle({
+            radius: 8,
+            fill: new Fill({ color: "#f59e0b" }),
+            stroke: new Stroke({ color: "#ffffff", width: 2 }),
+          }),
+        }),
+      });
+
+      map.addLayer(nearestLayer);
+      map.addLayer(originLayer);
+
+      nearestFeatureLayerRef.current = nearestLayer;
+      nearestOriginLayerRef.current = originLayer;
+
+      const extent = nearestSource.getExtent();
+
+      if (extent && !isEmpty(extent)) {
+        map.getView().fit(extent, {
+          padding: [80, 80, 80, 80],
+          duration: 500,
+          maxZoom: 16,
+        });
+      }
+    },
+
+    clearNearestFeatureHighlight() {
+      const map = mapInstance.current;
+
+      if (nearestFeatureLayerRef.current) {
+        map?.removeLayer(nearestFeatureLayerRef.current);
+        nearestFeatureLayerRef.current = null;
+      }
+
+      if (nearestOriginLayerRef.current) {
+        map?.removeLayer(nearestOriginLayerRef.current);
+        nearestOriginLayerRef.current = null;
+      }
+    },
+    highlightNearestFeatures(origin, features) {
+      const map = mapInstance.current;
+      if (!map) return;
+
+      if (nearestFeatureLayerRef.current) {
+        map.removeLayer(nearestFeatureLayerRef.current);
+        nearestFeatureLayerRef.current = null;
+      }
+
+      if (nearestOriginLayerRef.current) {
+        map.removeLayer(nearestOriginLayerRef.current);
+        nearestOriginLayerRef.current = null;
+      }
+
+      const format = new GeoJSON();
+
+      const mapFeatures = format.readFeatures(
+        {
+          type: "FeatureCollection",
+          features,
+        },
+        {
+          dataProjection: "EPSG:4326",
+          featureProjection: "EPSG:3857",
+        },
+      );
+
+      mapFeatures.forEach((feature, index) => {
+        feature.set("nearestRank", index + 1);
+      });
+
+      const nearestSource = new VectorSource({
+        features: mapFeatures,
+      });
+
+      const nearestLayer = new VectorLayer({
+        source: nearestSource,
+        zIndex: 120,
+        style: (feature) => {
+          const rank = Number(feature.get("nearestRank"));
+          const isNearest = rank === 1;
+
+          return new Style({
+            fill: new Fill({
+              color: isNearest
+                ? "rgba(167, 139, 250, 0.16)"
+                : "rgba(251, 113, 133, 0.07)",
+            }),
+            stroke: new Stroke({
+              color: isNearest ? "#a78bfa" : "#fb7185",
+              width: isNearest ? 3 : 2,
+            }),
+            image: new Circle({
+              radius: isNearest ? 9 : 7,
+              fill: new Fill({
+                color: isNearest ? "#a78bfa" : "#fb7185",
+              }),
+              stroke: new Stroke({
+                color: "#ffffff",
+                width: 2,
+              }),
+            }),
+          });
+        },
+      });
+
+      const originSource = new VectorSource({
+        features: [
+          new Feature({
+            geometry: new Point(fromLonLat(origin)),
+          }),
+        ],
+      });
+
+      const originLayer = new VectorLayer({
+        source: originSource,
+        zIndex: 121,
+        style: new Style({
+          image: new Circle({
+            radius: 8,
+            fill: new Fill({ color: "#f59e0b" }),
+            stroke: new Stroke({ color: "#ffffff", width: 2 }),
+          }),
+        }),
+      });
+
+      map.addLayer(nearestLayer);
+      map.addLayer(originLayer);
+
+      nearestFeatureLayerRef.current = nearestLayer;
+      nearestOriginLayerRef.current = originLayer;
+
+      const extent = nearestSource.getExtent();
+
+      if (extent && !isEmpty(extent)) {
+        map.getView().fit(extent, {
+          padding: [80, 80, 80, 80],
+          duration: 500,
+          maxZoom: 16,
+        });
+      }
+    },
+    setHeatmap(layerId, radius, blur) {
+      const map = mapInstance.current;
+
+      if (!map) {
+        throw new Error("Map is not ready yet.");
+      }
+
+      // Disable and remove the existing heatmap.
+      const existingHeatmap = map
+        .getLayers()
+        .getArray()
+        .find((layer) => layer.get("name") === "geomind-heatmap");
+
+      if (existingHeatmap) {
+        map.removeLayer(existingHeatmap);
+      }
+
+      // Null layerId means disable the heatmap.
+      if (!layerId) return;
+
+      const importedLayer = importedLayersRef.current.find(
+        (item) => item.id === layerId,
+      );
+
+      if (!importedLayer) {
+        throw new Error("Please select a valid imported layer.");
+      }
+
+      const pointFeatures = importedLayer.source
+        .getFeatures()
+        .filter((feature) => {
+          const geometry = feature.getGeometry();
+          return (
+            geometry?.getType() === "Point" ||
+            geometry?.getType() === "MultiPoint"
+          );
+        });
+
+      if (pointFeatures.length === 0) {
+        throw new Error(
+          "The selected layer contains no point features for heatmap analysis.",
+        );
+      }
+
+      const heatmapLayer = new HeatmapLayer({
+        source: new VectorSource({
+          features: pointFeatures,
+        }),
+        blur: Math.max(0, blur),
+        radius: Math.max(1, radius),
+        weight: () => 1,
+        opacity: 0.8,
+        zIndex: 1000,
+      });
+
+      heatmapLayer.set("name", "geomind-heatmap");
+      map.addLayer(heatmapLayer);
+    },
+    setRoutePickMode(callback) {
+      routePickCallbackRef.current = callback;
+    },
+
+    showRouteDistance(start, destination) {
+      const map = mapInstance.current;
+
+      if (!map) {
+        throw new Error("Map is not ready yet.");
+      }
+
+      if (routeLayerRef.current) {
+        map.removeLayer(routeLayerRef.current);
+        routeLayerRef.current = null;
+      }
+
+      const startCoordinate = fromLonLat(start);
+      const destinationCoordinate = fromLonLat(destination);
+
+      const source = new VectorSource({
+        features: [
+          new Feature({
+            geometry: new LineString([startCoordinate, destinationCoordinate]),
+          }),
+          new Feature({
+            geometry: new Point(startCoordinate),
+            routePoint: "start",
+          }),
+          new Feature({
+            geometry: new Point(destinationCoordinate),
+            routePoint: "destination",
+          }),
+        ],
+      });
+
+      const layer = new VectorLayer({
+        source,
+        zIndex: 125,
+        style: (feature) => {
+          if (feature.get("routePoint")) {
+            return new Style({
+              image: new Circle({
+                radius: 8,
+                fill: new Fill({
+                  color:
+                    feature.get("routePoint") === "start"
+                      ? "#f59e0b"
+                      : "#a78bfa",
+                }),
+                stroke: new Stroke({
+                  color: "#ffffff",
+                  width: 2,
+                }),
+              }),
+            });
+          }
+
+          return new Style({
+            stroke: new Stroke({
+              color: "#a78bfa",
+              width: 3,
+              lineDash: [8, 5],
+            }),
+          });
+        },
+      });
+
+      map.addLayer(layer);
+      routeLayerRef.current = layer;
+
+      return getDistance(start, destination);
+    },
+
+    clearRouteDistance() {
+      const map = mapInstance.current;
+
+      if (map && routeLayerRef.current) {
+        map.removeLayer(routeLayerRef.current);
+        routeLayerRef.current = null;
+      }
+
+      routePickCallbackRef.current = null;
+    },
+
+showRoadRoute(geometry) {
+  const map = mapInstance.current;
+
+  if (!map) {
+    throw new Error("Map is not ready yet.");
+  }
+
+  if (
+    geometry.type !== "LineString" ||
+    geometry.coordinates.length < 2
+  ) {
+    throw new Error("The road route geometry is invalid.");
+  }
+
+  if (routeLayerRef.current) {
+    map.removeLayer(routeLayerRef.current);
+    routeLayerRef.current = null;
+  }
+
+  const routeCoordinates = geometry.coordinates.map(
+    ([longitude, latitude]) => fromLonLat([longitude, latitude]),
+  );
+
+  const source = new VectorSource({
+    features: [
+      new Feature({
+        geometry: new LineString(routeCoordinates),
+        routePoint: "road",
+      }),
+      new Feature({
+        geometry: new Point(routeCoordinates[0]),
+        routePoint: "start",
+      }),
+      new Feature({
+        geometry: new Point(routeCoordinates[routeCoordinates.length - 1]),
+        routePoint: "destination",
+      }),
+    ],
+  });
+
+  const layer = new VectorLayer({
+    source,
+    zIndex: 125,
+    style: (feature) => {
+      const pointType = feature.get("routePoint");
+
+      if (pointType === "start") {
+        return new Style({
+          image: new Circle({
+            radius: 8,
+            fill: new Fill({ color: "#f59e0b" }),
+            stroke: new Stroke({ color: "#ffffff", width: 2 }),
+          }),
+        });
+      }
+
+      if (pointType === "destination") {
+        return new Style({
+          image: new Circle({
+            radius: 8,
+            fill: new Fill({ color: "#a78bfa" }),
+            stroke: new Stroke({ color: "#ffffff", width: 2 }),
+          }),
+        });
+      }
+
+      return new Style({
+        stroke: new Stroke({
+          color: "#a78bfa",
+          width: 5,
+        }),
+      });
+    },
+  });
+
+  map.addLayer(layer);
+  routeLayerRef.current = layer;
+
+  map.getView().fit(source.getExtent(), {
+    padding: [100, 100, 100, 100],
+    duration: 600,
+    maxZoom: 17,
+  });
+},
+getNearestFeaturesInput() {
+  const map = mapInstance.current;
+
+  if (!map) return null;
+
+  const center = map.getView().getCenter();
+
+  if (!center || importedLayersRef.current.length === 0) {
+    return null;
+  }
+
+  const format = new GeoJSON();
+
+  const features = importedLayersRef.current.flatMap(
+    ({ source, layer }) => {
+      if (!layer.getVisible()) return [];
+
+      return format.writeFeaturesObject(source.getFeatures(), {
+        featureProjection: "EPSG:3857",
+        dataProjection: "EPSG:4326",
+      }).features;
+    },
+  );
+
+  if (features.length === 0) return null;
+
+  const [longitude, latitude] = transform(
+    center,
+    "EPSG:3857",
+    "EPSG:4326",
+  );
+
+  return {
+    coordinates: [longitude, latitude] as [number, number],
+    features: features as Record<string, unknown>[],
+  };
+},
+
   }));
 
   useEffect(() => {
@@ -767,6 +1280,26 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
     });
 
     mapInstance.current = map;
+
+    map.on("singleclick", (event) => {
+      const [longitude, latitude] = toLonLat(event.coordinate);
+      const coordinates: [number, number] = [longitude, latitude];
+
+      const routeCallback = routePickCallbackRef.current;
+
+      if (routeCallback) {
+        routePickCallbackRef.current = null;
+        routeCallback(coordinates);
+        return;
+      }
+
+      const nearestCallback = nearestFeaturePickCallbackRef.current;
+
+      if (nearestCallback) {
+        nearestFeaturePickCallbackRef.current = null;
+        nearestCallback(coordinates);
+      }
+    });
 
     const selectInteraction = new Select({
       condition: click,
@@ -881,6 +1414,11 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
       markerSourceRef.current = null;
       drawingSourceRef.current = null;
       importedLayersRef.current = [];
+      nearestFeaturePickCallbackRef.current = null;
+      nearestFeatureLayerRef.current = null;
+      nearestOriginLayerRef.current = null;
+      routePickCallbackRef.current = null;
+      routeLayerRef.current = null;
     };
   }, []);
 

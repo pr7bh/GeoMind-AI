@@ -34,7 +34,7 @@ export default function Sidebar({
     <aside
       className={`relative flex w-14 shrink-0 flex-col items-center border-r py-3 transition-colors duration-200 ${
         isDark
-          ? 'border-neutral-800 bg-black'
+          ? 'border-neutral-800 bg-[black]'
           : 'border-gray-200 bg-white'
       }`}
     >
