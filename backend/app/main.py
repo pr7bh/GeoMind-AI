@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from app.routers.analysis import router as analysis_router
 from app.routers.routing import router as routing_router
 from app.routers.agent import router as agent_router
+from app.routers.discovery import router as discovery_router
 
 app = FastAPI(
     title="GeoMind AI API",
@@ -50,3 +51,4 @@ def health_check():
 app.include_router(analysis_router)
 app.include_router(routing_router)
 app.include_router(agent_router)
+app.include_router(discovery_router)

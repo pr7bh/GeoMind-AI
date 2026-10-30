@@ -1,90 +1,274 @@
+"""Real-world feature discovery from OpenStreetMap via the Overpass API."""
+
+import logging
+import os
+from typing import Any
 
 import httpx
-import math
+from shapely import make_valid
+from shapely.geometry import LineString, MultiLineString, Point, Polygon, mapping
+from shapely.geometry.base import BaseGeometry
+from shapely.ops import polygonize, unary_union
 
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+from app.services.spatial_analysis import _feature_distances, _validate_origin
 
-# Reusable OpenStreetMap category definitions.
-OSM_CATEGORIES = {
-    "hospital": [("amenity", "hospital")],
-    "clinic": [("amenity", "clinic")],
-    "pharmacy": [("amenity", "pharmacy")],
-    "school": [("amenity", "school")],
-    "university": [("amenity", "university")],
-    "college": [("amenity", "college")],
-    "restaurant": [("amenity", "restaurant")],
-    "cafe": [("amenity", "cafe")],
-    "bank": [("amenity", "bank")],
-    "police": [("amenity", "police")],
-    "fire_station": [("amenity", "fire_station")],
-    "bus_stop": [("highway", "bus_stop")],
-    "railway_station": [("railway", "station")],
-    "airport": [("aeroway", "aerodrome")],
-    "park": [("leisure", "park")],
-    "forest": [("landuse", "forest"), ("natural", "wood")],
-    "river": [("waterway", "river")],
-    "lake": [("natural", "water")],
-    "building": [("building", None)],
-    "road": [("highway", None)],
+logger = logging.getLogger(__name__)
+
+OVERPASS_URL = os.getenv(
+    "OVERPASS_URL", "https://overpass-api.de/api/interpreter"
+)
+USER_AGENT = "GeoMind-AI/0.2"
+REQUEST_TIMEOUT_SECONDS = 40.0
+QUERY_TIMEOUT_SECONDS = 30
+# Hard cap on elements Overpass may return for one query.
+MAX_ELEMENTS = 3000
+MAX_RADIUS_KM = 50.0
+
+SOURCE = "OpenStreetMap (Overpass API)"
+ATTRIBUTION = "© OpenStreetMap contributors, ODbL"
+COVERAGE_NOTE = (
+    "Only features mapped in OpenStreetMap are included. "
+    "Coverage varies by region and may be incomplete."
+)
+
+
+def _category(
+    label: str,
+    group: str,
+    selectors: list[str],
+    max_radius_km: float = MAX_RADIUS_KM,
+) -> dict[str, Any]:
+    return {
+        "label": label,
+        "group": group,
+        "selectors": selectors,
+        "max_radius_km": max_radius_km,
+    }
+
+
+# Each selector is an Overpass element filter; "nwr" = nodes, ways, relations.
+OSM_CATEGORIES: dict[str, dict[str, Any]] = {
+    # Healthcare
+    "hospital": _category("Hospitals", "healthcare", [
+        'nwr["amenity"="hospital"]', 'nwr["healthcare"="hospital"]',
+    ]),
+    "clinic": _category("Clinics", "healthcare", [
+        'nwr["amenity"="clinic"]', 'nwr["healthcare"="clinic"]',
+    ]),
+    "doctors": _category("Doctors", "healthcare", [
+        'nwr["amenity"="doctors"]', 'nwr["healthcare"="doctor"]',
+    ]),
+    "dentist": _category("Dentists", "healthcare", [
+        'nwr["amenity"="dentist"]', 'nwr["healthcare"="dentist"]',
+    ]),
+    "pharmacy": _category("Pharmacies", "healthcare", [
+        'nwr["amenity"="pharmacy"]', 'nwr["healthcare"="pharmacy"]',
+    ]),
+    "healthcare": _category("All healthcare facilities", "healthcare", [
+        'nwr["amenity"~"^(hospital|clinic|doctors|dentist|pharmacy)$"]',
+        'nwr["healthcare"]',
+    ]),
+    # Education
+    "school": _category("Schools", "education", ['nwr["amenity"="school"]']),
+    "university": _category(
+        "Universities", "education", ['nwr["amenity"="university"]']
+    ),
+    "college": _category("Colleges", "education", ['nwr["amenity"="college"]']),
+    "kindergarten": _category(
+        "Kindergartens", "education", ['nwr["amenity"="kindergarten"]']
+    ),
+    "education": _category("All education facilities", "education", [
+        'nwr["amenity"~"^(school|university|college|kindergarten)$"]',
+    ]),
+    # Transportation
+    "bus_stop": _category("Bus stops", "transportation", [
+        'node["highway"="bus_stop"]',
+    ], max_radius_km=10),
+    "railway_station": _category("Railway stations", "transportation", [
+        'nwr["railway"~"^(station|halt)$"]',
+    ]),
+    "airport": _category("Airports", "transportation", [
+        'nwr["aeroway"="aerodrome"]',
+    ]),
+    "fuel": _category("Fuel stations", "transportation", [
+        'nwr["amenity"="fuel"]',
+    ]),
+    "parking": _category("Parking", "transportation", [
+        'nwr["amenity"="parking"]',
+    ], max_radius_km=10),
+    "road": _category("Roads", "transportation", [
+        (
+            'way["highway"~"^(motorway|trunk|primary|secondary|tertiary|'
+            'unclassified|residential|living_street|service|'
+            '(motorway|trunk|primary|secondary|tertiary)_link)$"]'
+        ),
+    ], max_radius_km=5),
+    "major_road": _category("Major roads", "transportation", [
+        'way["highway"~"^(motorway|trunk|primary|secondary)(_link)?$"]',
+    ], max_radius_km=20),
+    # Built environment
+    "building": _category("Buildings", "built_environment", [
+        'way["building"]', 'relation["building"]',
+    ], max_radius_km=2),
+    "government": _category("Government facilities", "built_environment", [
+        'nwr["office"="government"]',
+        'nwr["amenity"~"^(townhall|courthouse)$"]',
+    ]),
+    "post_office": _category("Post offices", "built_environment", [
+        'nwr["amenity"="post_office"]',
+    ]),
+    # Emergency services
+    "police": _category("Police stations", "emergency", [
+        'nwr["amenity"="police"]',
+    ]),
+    "fire_station": _category("Fire stations", "emergency", [
+        'nwr["amenity"="fire_station"]',
+    ]),
+    # Food, lodging and finance
+    "restaurant": _category("Restaurants", "food", [
+        'nwr["amenity"="restaurant"]',
+    ], max_radius_km=20),
+    "cafe": _category("Cafés", "food", ['nwr["amenity"="cafe"]'], max_radius_km=20),
+    "fast_food": _category("Fast food", "food", [
+        'nwr["amenity"="fast_food"]',
+    ], max_radius_km=20),
+    "hotel": _category("Hotels and lodging", "tourism", [
+        'nwr["tourism"~"^(hotel|motel|guest_house|hostel)$"]',
+    ]),
+    "bank": _category("Banks", "finance", ['nwr["amenity"="bank"]']),
+    "atm": _category("ATMs", "finance", ['nwr["amenity"="atm"]'], max_radius_km=20),
+    # Tourism
+    "tourism": _category("Tourist attractions", "tourism", [
+        'nwr["tourism"~"^(attraction|museum|viewpoint|zoo|theme_park|gallery)$"]',
+    ]),
+    # Utilities
+    "utilities": _category("Utilities", "utilities", [
+        'nwr["power"~"^(plant|substation)$"]',
+        'nwr["man_made"~"^(water_tower|water_works|wastewater_plant)$"]',
+    ]),
+    "power_line": _category("Power lines", "utilities", [
+        'way["power"~"^(line|minor_line)$"]',
+    ], max_radius_km=20),
+    # Nature and land use
+    "park": _category("Parks", "nature", ['nwr["leisure"="park"]']),
+    "forest": _category("Forests and woodland", "nature", [
+        'nwr["landuse"="forest"]', 'nwr["natural"="wood"]',
+    ], max_radius_km=20),
+    "river": _category("Rivers and canals", "water", [
+        'way["waterway"~"^(river|canal)$"]',
+        'relation["waterway"~"^(river|canal)$"]',
+    ], max_radius_km=30),
+    "stream": _category("Streams", "water", [
+        'way["waterway"="stream"]',
+    ], max_radius_km=10),
+    "lake": _category("Lakes and water bodies", "water", [
+        'nwr["natural"="water"]',
+    ], max_radius_km=30),
+    "landuse": _category("Land use", "land_use", [
+        'way["landuse"]', 'relation["landuse"]',
+    ], max_radius_km=5),
 }
 
 CATEGORY_ALIASES = {
     "hospitals": "hospital",
-    "clinics": "clinic",
+    "health": "healthcare",
+    "health_facility": "healthcare",
+    "medical": "healthcare",
+    "doctor": "doctors",
     "pharmacies": "pharmacy",
+    "chemist": "pharmacy",
     "schools": "school",
     "universities": "university",
     "colleges": "college",
+    "station": "railway_station",
+    "stations": "railway_station",
+    "train_station": "railway_station",
+    "train_stations": "railway_station",
+    "railway_stations": "railway_station",
+    "bus_stops": "bus_stop",
+    "airports": "airport",
+    "gas_station": "fuel",
+    "petrol_station": "fuel",
+    "roads": "road",
+    "street": "road",
+    "streets": "road",
+    "highway": "major_road",
+    "highways": "major_road",
+    "buildings": "building",
+    "government_office": "government",
+    "police_station": "police",
+    "police_stations": "police",
+    "fire_stations": "fire_station",
     "restaurants": "restaurant",
     "cafes": "cafe",
+    "hotels": "hotel",
+    "lodging": "hotel",
     "banks": "bank",
-    "police stations": "police",
-    "fire stations": "fire_station",
-    "bus stops": "bus_stop",
-    "railway stations": "railway_station",
-    "stations": "railway_station",
-    "airports": "airport",
+    "atms": "atm",
+    "tourist_attraction": "tourism",
+    "tourist_attractions": "tourism",
+    "attractions": "tourism",
+    "utility": "utilities",
     "parks": "park",
     "forests": "forest",
+    "woods": "forest",
+    "woodland": "forest",
     "rivers": "river",
+    "canal": "river",
+    "streams": "stream",
     "lakes": "lake",
-    "buildings": "building",
-    "roads": "road",
+    "water": "lake",
+    "water_body": "lake",
+    "land_use": "landuse",
 }
+
+# Tags that make a closed way an area (vs. a closed line such as a roundabout).
+AREA_KEYS = {
+    "building", "landuse", "leisure", "natural", "amenity", "aeroway",
+    "tourism", "shop", "office", "healthcare", "historic", "man_made",
+    "military", "place", "public_transport", "water", "sport",
+}
+LINEAR_KEYS = {"highway", "waterway", "barrier", "railway", "route"}
+LINEAR_NATURAL = {"coastline", "tree_row", "cliff", "ridge"}
+
+
+class OverpassError(Exception):
+    def __init__(self, message: str, status_code: int = 502):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def normalize_category(category: str) -> str:
-    value = category.lower().strip().replace("-", "_")
-    return CATEGORY_ALIASES.get(value, value)
+    value = "_".join(category.lower().replace("-", " ").split())
+    candidates = [value, CATEGORY_ALIASES.get(value, value)]
 
+    if value.endswith("ies"):
+        candidates.append(value[:-3] + "y")
+    if value.endswith("es"):
+        candidates.append(value[:-2])
+    if value.endswith("s"):
+        candidates.append(value[:-1])
 
-def calculate_distance_km(
-    lat1: float,
-    lon1: float,
-    lat2: float,
-    lon2: float,
-) -> float:
-    earth_radius = 6371.0
+    for candidate in candidates:
+        if candidate in OSM_CATEGORIES:
+            return candidate
 
-    lat1, lon1, lat2, lon2 = map(
-        math.radians,
-        [lat1, lon1, lat2, lon2],
+    raise ValueError(
+        f"Unsupported category: {category}. "
+        f"Available categories: {', '.join(OSM_CATEGORIES)}"
     )
 
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
 
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(lat1)
-        * math.cos(lat2)
-        * math.sin(dlon / 2) ** 2
-    )
-
-    return earth_radius * 2 * math.atan2(
-        math.sqrt(a),
-        math.sqrt(1 - a),
-    )
+def list_categories() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": name,
+            "label": spec["label"],
+            "group": spec["group"],
+            "max_radius_km": spec["max_radius_km"],
+        }
+        for name, spec in OSM_CATEGORIES.items()
+    ]
 
 
 def build_overpass_query(
@@ -93,141 +277,297 @@ def build_overpass_query(
     radius_metres: int,
     category: str,
 ) -> str:
-    category = normalize_category(category)
+    around = f"(around:{radius_metres},{latitude},{longitude})"
+    statements = "".join(
+        f"{selector}{around};"
+        for selector in OSM_CATEGORIES[category]["selectors"]
+    )
 
-    if category not in OSM_CATEGORIES:
-        raise ValueError(
-            f"Unsupported category: {category}. "
-            f"Available categories: {', '.join(OSM_CATEGORIES)}"
+    return (
+        f"[out:json][timeout:{QUERY_TIMEOUT_SECONDS}];"
+        f"({statements});"
+        f"out geom {MAX_ELEMENTS};"
+    )
+
+
+def _coords(points: list[dict[str, float] | None] | None) -> list[tuple[float, float]]:
+    # Overpass emits null for nodes it could not resolve.
+    return [(p["lon"], p["lat"]) for p in points or [] if p]
+
+
+def _is_area(tags: dict[str, str], coords: list[tuple[float, float]]) -> bool:
+    if len(coords) < 4 or coords[0] != coords[-1]:
+        return False
+
+    if tags.get("area") in ("yes", "no"):
+        return tags["area"] == "yes"
+
+    if tags.get("natural") in LINEAR_NATURAL:
+        return False
+
+    if tags.get("waterway") in ("riverbank", "dock"):
+        return True
+
+    if any(key in tags for key in LINEAR_KEYS):
+        return False
+
+    return any(key in tags for key in AREA_KEYS)
+
+
+def _relation_geometry(element: dict[str, Any]) -> BaseGeometry | None:
+    outer: list[LineString] = []
+    inner: list[LineString] = []
+
+    for member in element.get("members", []):
+        coords = _coords(member.get("geometry"))
+
+        if member.get("type") != "way" or len(coords) < 2:
+            continue
+
+        (inner if member.get("role") == "inner" else outer).append(
+            LineString(coords)
         )
 
-    selectors = []
+    if not outer:
+        return None
 
-    for key, value in OSM_CATEGORIES[category]:
-        tag_filter = f'["{key}"]' if value is None else f'["{key}"="{value}"]'
+    if element.get("tags", {}).get("type") in ("multipolygon", "boundary"):
+        polygons = list(polygonize(unary_union(outer)))
 
-        selectors.append(
-            f"node(around:{radius_metres},{latitude},{longitude}){tag_filter};"
-        )
-        selectors.append(
-            f"way(around:{radius_metres},{latitude},{longitude}){tag_filter};"
-        )
-        selectors.append(
-            f"relation(around:{radius_metres},{latitude},{longitude}){tag_filter};"
-        )
+        if polygons:
+            geometry = unary_union(polygons)
 
-    return f"""
-    [out:json][timeout:30];
-    (
-        {"".join(selectors)}
-    );
-    out center tags;
-    """
+            if inner:
+                holes = list(polygonize(unary_union(inner)))
+                geometry = geometry.difference(unary_union(holes))
+
+            return geometry
+
+    return MultiLineString(outer + inner)
 
 
-def discover_features(
-    coordinates: list[float],
-    category: str,
-    radius_km: float = 5,
-    limit: int = 500,
-) -> dict:
-    if len(coordinates) != 2:
-        raise ValueError("Coordinates must contain longitude and latitude.")
+def _element_geometry(element: dict[str, Any]) -> BaseGeometry | None:
+    element_type = element.get("type")
 
-    longitude, latitude = coordinates
+    if element_type == "node":
+        if "lat" not in element or "lon" not in element:
+            return None
+        return Point(element["lon"], element["lat"])
 
-    if not (-180 <= longitude <= 180 and -90 <= latitude <= 90):
-        raise ValueError("Invalid longitude or latitude.")
+    if element_type == "way":
+        coords = _coords(element.get("geometry"))
 
-    if not (0 < radius_km <= 100):
-        raise ValueError("Radius must be greater than 0 and at most 100 km.")
+        if len(coords) < 2:
+            return None
 
-    radius_metres = int(radius_km * 1000)
+        if _is_area(element.get("tags", {}), coords):
+            return Polygon(coords)
 
-    query = build_overpass_query(
-        latitude,
-        longitude,
-        radius_metres,
-        category,
+        return LineString(coords)
+
+    if element_type == "relation":
+        return _relation_geometry(element)
+
+    return None
+
+
+def _clean_geometry(geometry: BaseGeometry) -> BaseGeometry | None:
+    if not geometry.is_valid:
+        geometry = make_valid(geometry)
+
+    # make_valid can produce mixed collections; keep the highest dimension.
+    if geometry.geom_type == "GeometryCollection":
+        for wanted in (("Polygon", "MultiPolygon"), ("LineString", "MultiLineString")):
+            parts = [g for g in geometry.geoms if g.geom_type in wanted]
+            if parts:
+                geometry = unary_union(parts)
+                break
+        else:
+            return None
+
+    return None if geometry.is_empty else geometry
+
+
+def _format_address(tags: dict[str, str]) -> str | None:
+    street = " ".join(
+        part for part in (tags.get("addr:housenumber"), tags.get("addr:street")) if part
+    )
+    locality = " ".join(
+        part for part in (tags.get("addr:city"), tags.get("addr:postcode")) if part
+    )
+    address = ", ".join(part for part in (street, locality) if part)
+
+    return address or tags.get("addr:full")
+
+
+def _to_feature(element: dict[str, Any], category: str) -> dict[str, Any] | None:
+    geometry = _element_geometry(element)
+
+    if geometry is None:
+        return None
+
+    geometry = _clean_geometry(geometry)
+
+    if geometry is None:
+        return None
+
+    tags = element.get("tags", {})
+    name = tags.get("name") or tags.get("name:en")
+    osm_type = element["type"]
+    osm_id = element["id"]
+
+    return {
+        "type": "Feature",
+        "id": f"{osm_type}/{osm_id}",
+        "geometry": mapping(geometry),
+        "properties": {
+            "name": name,
+            "display_name": name or f"Unnamed {category.replace('_', ' ')}",
+            "category": category,
+            "address": _format_address(tags),
+            "osm_type": osm_type,
+            "osm_id": osm_id,
+            "osm_url": f"https://www.openstreetmap.org/{osm_type}/{osm_id}",
+            "source": SOURCE,
+            # Raw OSM tags, kept separate so none are overwritten.
+            "tags": tags,
+        },
+    }
+
+
+async def _fetch_overpass(
+    query: str,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    owns_client = client is None
+    client = client or httpx.AsyncClient(
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        headers={"User-Agent": USER_AGENT},
     )
 
     try:
-        response = httpx.post(
-            OVERPASS_URL,
-            data={"data": query},
-            timeout=40.0,
-        )
-        response.raise_for_status()
-        osm_data = response.json()
-
+        response = await client.post(OVERPASS_URL, data={"data": query})
     except httpx.TimeoutException as exc:
-        raise RuntimeError("OpenStreetMap discovery timed out.") from exc
-
-    except httpx.HTTPStatusError as exc:
-        raise RuntimeError(
-            "OpenStreetMap could not process the discovery request."
+        raise OverpassError(
+            "OpenStreetMap discovery timed out. Try a smaller radius.", 504
         ) from exc
-
     except httpx.RequestError as exc:
-        raise RuntimeError(
-            "Unable to connect to OpenStreetMap."
-        ) from exc
+        raise OverpassError("Unable to connect to the Overpass API.", 502) from exc
+    finally:
+        if owns_client:
+            await client.aclose()
+
+    # 429 is rate limiting; 502-504 mean the public instance is overloaded.
+    if response.status_code in (429, 502, 503, 504):
+        raise OverpassError(
+            "The Overpass API is busy. Please retry in a moment.", 503
+        )
+
+    if response.status_code >= 400:
+        raise OverpassError(
+            f"The Overpass API rejected the request ({response.status_code}).", 502
+        )
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise OverpassError("The Overpass API returned an invalid response.", 502) from exc
+
+    # Server-side failures arrive as HTTP 200 with partial data and a remark.
+    remark = data.get("remark") or ""
+    if "runtime error" in remark.lower():
+        logger.warning("Overpass runtime error: %s", remark)
+        raise OverpassError(
+            "OpenStreetMap could not complete this query. Try a smaller radius.", 504
+        )
+
+    return data
+
+
+async def discover_features(
+    coordinates: list[float],
+    category: str,
+    radius_km: float = 5,
+    limit: int = 200,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    longitude, latitude = _validate_origin(coordinates)
+    category = normalize_category(category)
+    spec = OSM_CATEGORIES[category]
+
+    if not (0 < radius_km <= spec["max_radius_km"]):
+        raise ValueError(
+            f"Radius for {category} must be greater than 0 and at most "
+            f"{spec['max_radius_km']:g} km."
+        )
+
+    query = build_overpass_query(
+        latitude, longitude, int(radius_km * 1000), category
+    )
+    osm_data = await _fetch_overpass(query, client)
+    elements = osm_data.get("elements", [])
 
     features = []
+    seen: set[tuple[str, int]] = set()
+    skipped = 0
 
-    for element in osm_data.get("elements", []):
-        element_lat = element.get("lat")
-        element_lon = element.get("lon")
+    for element in elements:
+        key = (element.get("type"), element.get("id"))
 
-        # Ways and relations can have center coordinates.
-        if element_lat is None or element_lon is None:
-            center = element.get("center", {})
-            element_lat = center.get("lat")
-            element_lon = center.get("lon")
+        if key in seen:
+            continue
+        seen.add(key)
 
-        if element_lat is None or element_lon is None:
+        feature = _to_feature(element, category)
+
+        if feature is None:
+            skipped += 1
             continue
 
-        distance_km = calculate_distance_km(
-            latitude,
-            longitude,
-            element_lat,
-            element_lon,
+        features.append(feature)
+
+    distances = {
+        index: distance
+        for distance, index, _ in _feature_distances([longitude, latitude], features)
+    }
+
+    for index, feature in enumerate(features):
+        distance = distances.get(index)
+        feature["properties"]["distance_km"] = (
+            None if distance is None else round(distance / 1000, 3)
         )
 
-        tags = element.get("tags", {})
-
-        features.append({
-            "type": "Feature",
-            "id": f"{element['type']}/{element['id']}",
-            "geometry": {
-                "type": "Point",
-                "coordinates": [element_lon, element_lat],
-            },
-            "properties": {
-                **tags,
-                "osm_id": element["id"],
-                "osm_type": element["type"],
-                "category": normalize_category(category),
-                "name": tags.get("name") or tags.get("name:en"),
-                "distance_km": round(distance_km, 3),
-            },
-        })
-
     features.sort(
-        key=lambda feature: feature["properties"]["distance_km"]
+        key=lambda f: (
+            f["properties"]["distance_km"] is None,
+            f["properties"]["distance_km"] or 0,
+        )
     )
+    returned = features[:limit]
+    server_limit_reached = len(elements) >= MAX_ELEMENTS
 
-    features = features[:limit]
+    logger.info(
+        "Discovered %d %s features within %.2f km of %.5f,%.5f",
+        len(features), category, radius_km, latitude, longitude,
+    )
 
     return {
         "type": "FeatureCollection",
-        "features": features,
+        "features": returned,
         "metadata": {
-            "category": normalize_category(category),
+            "category": category,
+            "label": spec["label"],
+            "center": [longitude, latitude],
             "radius_km": radius_km,
             "total_found": len(features),
-            "source": "OpenStreetMap",
-            "center": coordinates,
+            "returned": len(returned),
+            "truncated": server_limit_reached or len(features) > limit,
+            "server_limit_reached": server_limit_reached,
+            "skipped_without_geometry": skipped,
+            "geometry_types": sorted({f["geometry"]["type"] for f in returned}),
+            "source": SOURCE,
+            "attribution": ATTRIBUTION,
+            "osm_base": osm_data.get("osm3s", {}).get("timestamp_osm_base"),
+            "coverage_note": COVERAGE_NOTE,
         },
     }
