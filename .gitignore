@@ -18,3 +18,6 @@ dist/
 
 # IDE
 .vscode/
+
+# Backend runtime cache
+backend/cache/
