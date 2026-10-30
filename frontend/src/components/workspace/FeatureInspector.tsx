@@ -134,11 +134,38 @@ export default function FeatureInspector({
   if (!feature) return null;
 
   const geometryIcon =
-    feature.geometryType === "Point"
+    feature.geometryType === "Point" || feature.geometryType === "MultiPoint"
       ? MapPin
-      : feature.geometryType === "Polygon"
+      : feature.geometryType === "Polygon" ||
+          feature.geometryType === "MultiPolygon"
         ? Pentagon
         : Ruler;
+
+  const osm =
+    feature.properties?.osm_id != null ? feature.properties : undefined;
+  const osmTags =
+    osm?.tags && typeof osm.tags === "object"
+      ? Object.entries(osm.tags as Record<string, string>)
+      : [];
+  const osmRows: [string, string][] = osm
+    ? [
+        ["Name", String(osm.display_name ?? osm.name ?? "Unnamed")],
+        ["Category", String(osm.category ?? "—").replace(/_/g, " ")],
+        [
+          "Distance from search centre",
+          typeof osm.distance_km === "number"
+            ? osm.distance_km < 1
+              ? `${(osm.distance_km * 1000).toFixed(0)} m`
+              : `${osm.distance_km.toFixed(2)} km`
+            : "—",
+        ],
+        ["Address", osm.address ? String(osm.address) : "Not recorded in OSM"],
+        ["Source", String(osm.source ?? "OpenStreetMap")],
+      ]
+    : [];
+  const cardClass = `rounded-lg border p-3 ${
+    isDark ? "border-white/8 bg-white/[0.025]" : "border-gray-200 bg-white/60"
+  }`;
 
   const GeometryIcon = geometryIcon;
 
@@ -166,7 +193,7 @@ export default function FeatureInspector({
         bottomLeft: true,
         topLeft: true,
       }}
-      className="z-20"
+      className="pointer-events-auto z-20"
     >
       <aside
         className={`flex h-full w-full flex-col overflow-hidden rounded-2xl border backdrop-blur-2xl transition-colors duration-300 ${
@@ -274,6 +301,59 @@ export default function FeatureInspector({
               </p>
             </div>
           </section>
+
+          {/* OpenStreetMap attributes */}
+          {osm && (
+            <section>
+              <p
+                className={`mb-3 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                  isDark ? "text-neutral-400" : "text-gray-500"
+                }`}
+              >
+                OpenStreetMap
+              </p>
+
+              <div className="space-y-2">
+                {osmRows.map(([label, value]) => (
+                  <div key={label} className={cardClass}>
+                    <p className="text-[11px] text-neutral-500">{label}</p>
+                    <p className="mt-1 break-words text-xs">{value}</p>
+                  </div>
+                ))}
+
+                <div className={cardClass}>
+                  <p className="text-[11px] text-neutral-500">OSM ID</p>
+                  <a
+                    href={String(osm.osm_url)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-1 block break-all font-mono text-xs text-emerald-500 hover:underline"
+                  >
+                    {String(osm.osm_type)}/{String(osm.osm_id)}
+                  </a>
+                </div>
+              </div>
+
+              {osmTags.length > 0 && (
+                <>
+                  <p
+                    className={`mb-2 mt-4 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                      isDark ? "text-neutral-400" : "text-gray-500"
+                    }`}
+                  >
+                    OSM tags ({osmTags.length})
+                  </p>
+                  <div className={`${cardClass} space-y-1`}>
+                    {osmTags.map(([key, value]) => (
+                      <p key={key} className="break-words font-mono text-[11px]">
+                        <span className="text-neutral-500">{key}</span> = {value}
+                      </p>
+                    ))}
+                  </div>
+                </>
+              )}
+            </section>
+          )}
 
           {/* Geometry measurements */}
           {(feature.geometryType === "LineString" &&

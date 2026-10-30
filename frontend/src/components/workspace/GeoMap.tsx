@@ -1,5 +1,8 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
-import type { Feature as GeoJSONFeature } from "geojson";
+import type {
+  Feature as GeoJSONFeature,
+  FeatureCollection as GeoJSONFeatureCollection,
+} from "geojson";
 import Map from "ol/Map";
 import View from "ol/View";
 import TileLayer from "ol/layer/Tile";
@@ -21,6 +24,7 @@ import { getArea, getLength, getDistance } from "ol/sphere";
 import GeoJSON from "ol/format/GeoJSON";
 import { isEmpty } from "ol/extent";
 import HeatmapLayer from "ol/layer/Heatmap";
+import type SimpleGeometry from "ol/geom/SimpleGeometry";
 
 export interface SelectedFeatureInfo {
   id: string;
@@ -30,7 +34,10 @@ export interface SelectedFeatureInfo {
   lengthMeters?: number;
   areaSquareMeters?: number;
   perimeterMeters?: number;
+  properties?: Record<string, unknown>;
 }
+
+export type MapLayerKind = "imported" | "analysis" | "discovery";
 
 export interface ImportedLayerInfo {
   id: string;
@@ -38,6 +45,8 @@ export interface ImportedLayerInfo {
   count: number;
   geometryTypes: string[];
   visible: boolean;
+  kind: MapLayerKind;
+  color?: string;
 }
 
 export interface ImportedPointInfo {
@@ -119,6 +128,44 @@ getNearestFeaturesInput: () => {
   coordinates: [number, number];
   features: Record<string, unknown>[];
 } | null;
+  getViewCenter: () => [number, number] | null;
+  addDiscoveryLayer: (
+    collection: GeoJSONFeatureCollection,
+    layerName: string,
+  ) => ImportedLayerInfo;
+  clearDiscoveryLayers: () => void;
+}
+
+const SUPPORTED_GEOMETRY_TYPES = new Set([
+  "Point",
+  "MultiPoint",
+  "LineString",
+  "MultiLineString",
+  "Polygon",
+  "MultiPolygon",
+]);
+
+// Distinct per-layer colours for discovery results.
+const DISCOVERY_COLORS = [
+  "#f59e0b",
+  "#38bdf8",
+  "#a78bfa",
+  "#f472b6",
+  "#a3e635",
+  "#22d3ee",
+  "#fb923c",
+];
+
+function discoveryStyle(color: string) {
+  return new Style({
+    fill: new Fill({ color: `${color}33` }),
+    stroke: new Stroke({ color, width: 2.5 }),
+    image: new Circle({
+      radius: 6,
+      fill: new Fill({ color }),
+      stroke: new Stroke({ color: "#ffffff", width: 1.5 }),
+    }),
+  });
 }
 
 const INITIAL_CENTER: [number, number] = [0, 0];
@@ -166,6 +213,8 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
     layer: VectorLayer<VectorSource>;
     count: number;
     geometryTypes: string[];
+    kind: MapLayerKind;
+    color?: string;
   }
 
   const importedLayersRef = useRef<ImportedLayerRecord[]>([]);
@@ -364,6 +413,7 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
         layer,
         count: features.length,
         geometryTypes,
+        kind: "imported",
       });
 
       return {
@@ -374,12 +424,14 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
 
     getImportedLayers() {
       return importedLayersRef.current.map(
-        ({ id, name, count, geometryTypes, layer }) => ({
+        ({ id, name, count, geometryTypes, layer, kind, color }) => ({
           id,
           name,
           count,
           geometryTypes,
           visible: layer.getVisible(),
+          kind,
+          color,
         }),
       );
     },
@@ -394,6 +446,13 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
       const record = importedLayersRef.current.find((item) => item.id === id);
 
       if (!map || !record) return;
+
+      const selected = selectInteractionRef.current?.getFeatures();
+
+      if (selected?.getArray().some((feature) => record.source.hasFeature(feature))) {
+        selected.clear();
+        onFeatureSelectRef.current?.(null);
+      }
 
       map.removeLayer(record.layer);
       importedLayersRef.current = importedLayersRef.current.filter(
@@ -712,6 +771,7 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
         layer,
         count: features.length,
         geometryTypes,
+        kind: "analysis",
       });
 
       const extent = source.getExtent();
@@ -1198,6 +1258,97 @@ getNearestFeaturesInput() {
   };
 },
 
+getViewCenter() {
+  const center = mapInstance.current?.getView().getCenter();
+
+  if (!center) return null;
+
+  const [longitude, latitude] = toLonLat(center);
+  return [longitude, latitude];
+},
+addDiscoveryLayer(collection, layerName) {
+  const map = mapInstance.current;
+
+  if (!map) {
+    throw new Error("Map is not ready yet.");
+  }
+
+  if (collection?.type !== "FeatureCollection" || !Array.isArray(collection.features)) {
+    throw new Error("The discovery response is not a valid GeoJSON FeatureCollection.");
+  }
+
+  const supported = collection.features.filter((feature) =>
+    SUPPORTED_GEOMETRY_TYPES.has(feature?.geometry?.type ?? ""),
+  );
+
+  if (supported.length === 0) {
+    throw new Error("The discovery response contains no supported geometries.");
+  }
+
+  const features = new GeoJSON().readFeatures(
+    { type: "FeatureCollection", features: supported },
+    {
+      dataProjection: "EPSG:4326",
+      featureProjection: "EPSG:3857",
+    },
+  );
+
+  const discoveryCount = importedLayersRef.current.filter(
+    (record) => record.kind === "discovery",
+  ).length;
+  const color = DISCOVERY_COLORS[discoveryCount % DISCOVERY_COLORS.length];
+  const source = new VectorSource({ features });
+  const layer = new VectorLayer({
+    source,
+    zIndex: 100 + importedLayersRef.current.length,
+    style: discoveryStyle(color),
+  });
+
+  const geometryTypes = [
+    ...new Set(
+      features.map((feature) => feature.getGeometry()?.getType() ?? "Unknown"),
+    ),
+  ];
+  const record: ImportedLayerRecord = {
+    id: crypto.randomUUID(),
+    name: layerName,
+    source,
+    layer,
+    count: features.length,
+    geometryTypes,
+    kind: "discovery",
+    color,
+  };
+
+  map.addLayer(layer);
+  importedLayersRef.current.push(record);
+
+  const extent = source.getExtent();
+
+  if (extent && !isEmpty(extent)) {
+    map.getView().fit(extent, {
+      padding: [80, 80, 80, 80],
+      duration: 600,
+      maxZoom: 17,
+    });
+  }
+
+  return {
+    id: record.id,
+    name: record.name,
+    count: record.count,
+    geometryTypes,
+    visible: true,
+    kind: "discovery",
+    color,
+  };
+},
+clearDiscoveryLayers() {
+  importedLayersRef.current
+    .filter((record) => record.kind === "discovery")
+    .forEach((record) => this.removeImportedLayer(record.id));
+},
+
   }));
 
   useEffect(() => {
@@ -1307,7 +1458,11 @@ getNearestFeaturesInput() {
 
     const selectInteraction = new Select({
       condition: click,
-      layers: [drawingLayer],
+      layers: (layer) =>
+        layer === drawingLayer ||
+        importedLayersRef.current.some(
+          (record) => record.kind === "discovery" && record.layer === layer,
+        ),
       style: new Style({
         fill: new Fill({
           color: "rgba(16, 185, 129, 0.3)",
@@ -1341,11 +1496,7 @@ getNearestFeaturesInput() {
 
       const geometryType = geometry.getType();
 
-      if (
-        geometryType !== "Point" &&
-        geometryType !== "LineString" &&
-        geometryType !== "Polygon"
-      ) {
+      if (!SUPPORTED_GEOMETRY_TYPES.has(geometryType)) {
         return;
       }
 
@@ -1364,30 +1515,15 @@ getNearestFeaturesInput() {
         perimeterMeters = getLength(polygon);
       }
 
-      let coordinates: number[] | number[][] | number[][][];
-      let coordinatesWGS84: number[] | number[][] | number[][][];
+      const simpleGeometry = geometry as SimpleGeometry;
+      const coordinates = simpleGeometry.getCoordinates();
+      const coordinatesWGS84 = (simpleGeometry.clone() as SimpleGeometry)
+        .transform("EPSG:3857", "EPSG:4326")
+        .getCoordinates();
 
-      if (geometry instanceof Point) {
-        coordinates = geometry.getCoordinates();
-        coordinatesWGS84 = geometry
-          .clone()
-          .transform("EPSG:3857", "EPSG:4326")
-          .getCoordinates();
-      } else if (geometry instanceof LineString) {
-        coordinates = geometry.getCoordinates();
-        coordinatesWGS84 = geometry
-          .clone()
-          .transform("EPSG:3857", "EPSG:4326")
-          .getCoordinates();
-      } else if (geometry instanceof Polygon) {
-        coordinates = geometry.getCoordinates();
-        coordinatesWGS84 = geometry
-          .clone()
-          .transform("EPSG:3857", "EPSG:4326")
-          .getCoordinates();
-      } else {
-        return;
-      }
+      // getProperties() returns OpenLayers' internal object, so copy it.
+      const featureProperties = { ...feature.getProperties() };
+      delete featureProperties[feature.getGeometryName()];
 
       onFeatureSelectRef.current?.({
         id: String(feature.getId() ?? crypto.randomUUID()),
@@ -1397,6 +1533,10 @@ getNearestFeaturesInput() {
         lengthMeters,
         areaSquareMeters,
         perimeterMeters,
+        properties:
+          Object.keys(featureProperties).length > 0
+            ? featureProperties
+            : undefined,
       });
     });
     return () => {

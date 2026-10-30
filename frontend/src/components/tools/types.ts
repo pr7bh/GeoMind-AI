@@ -2,7 +2,7 @@ import type { RefObject } from "react";
 import type { GeoMapHandle, ImportedLayerInfo } from "../workspace/GeoMap";
 
 // Only one tool may listen for map clicks at a time.
-export type MapPickTarget = "nearest" | "start" | "destination";
+export type MapPickTarget = "nearest" | "start" | "destination" | "discovery";
 
 export interface ToolProps {
   theme: "light" | "dark";

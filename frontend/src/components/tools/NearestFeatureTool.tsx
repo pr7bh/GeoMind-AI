@@ -135,10 +135,13 @@ export default function NearestFeatureTool({
   }
 
   function handleClear() {
-    mapRef.current?.setNearestFeaturePickMode(null);
-    mapRef.current?.clearNearestFeatureHighlight();
+    // The point-pick callback is shared, so only cancel it if this tool owns it.
+    if (pickActive) {
+      mapRef.current?.setNearestFeaturePickMode(null);
+      onEndMapPick();
+    }
 
-    if (pickActive) onEndMapPick();
+    mapRef.current?.clearNearestFeatureHighlight();
     setOrigin(null);
     setResult(null);
     setError("");

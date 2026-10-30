@@ -25,6 +25,7 @@ import LocationSearch from "../workspace/LocationSearch";
 import DrawingToolbar from "../workspace/DrawingToolbar";
 import type { DrawingMode } from "../workspace/DrawingToolbar";
 import GeoJSONImport from "../workspace/GeoJSONImport";
+import DiscoveryTool from "../tools/DiscoveryTool";
 import NearestFeatureTool from "../tools/NearestFeatureTool";
 import HeatmapTool from "../tools/HeatmapTool";
 import RoutingTool from "../tools/RoutingTool";
@@ -412,6 +413,12 @@ export default function AppLayout() {
                       : "border-white/70 scrollbar-thin-light"
                   }`}
                 >
+                  <DiscoveryTool
+                    {...toolProps}
+                    {...mapPickProps}
+                    onLayersChanged={refreshImportedLayers}
+                  />
+
                   <NearestFeatureTool {...toolProps} {...mapPickProps} />
 
                   <HeatmapTool {...toolProps} />
@@ -450,7 +457,8 @@ export default function AppLayout() {
           {/* Selected feature details: right side */}
           {selectedFeature && (
             <div className="pointer-events-none absolute inset-0 z-20">
-              <div className="pointer-events-auto absolute inset-0">
+              {/* Drag bounds only; the inspector itself re-enables pointer events. */}
+              <div className="pointer-events-none absolute inset-0">
                 <FeatureInspector
                   theme={theme}
                   feature={selectedFeature}
@@ -596,7 +604,7 @@ mapRef.current?.clearFeatureSelection();
                   <Layers size={16} className="shrink-0 text-emerald-500" />
 
                   <h3 className="text-sm font-semibold tracking-tight">
-                    Imported Layers
+                    Map Layers
                   </h3>
 
                   <span
@@ -618,8 +626,8 @@ mapRef.current?.clearFeatureSelection();
                         : "border-gray-200/80 bg-white/45 text-gray-500"
                     }`}
                   >
-                    No imported layers yet. Upload a GeoJSON file to get
-                    started.
+                    No layers yet. Upload a GeoJSON file or discover OSM
+                    features to get started.
                   </p>
                 ) : (
                   <div className="mt-3 flex max-h-64 flex-col gap-2 overflow-y-auto pr-0.5">
@@ -633,7 +641,16 @@ mapRef.current?.clearFeatureSelection();
                         }`}
                       >
                         <div className="flex items-center gap-1.5">
-                          <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                          {layer.color && (
+                            <span
+                              className="h-2.5 w-2.5 shrink-0 rounded-full"
+                              style={{ backgroundColor: layer.color }}
+                            />
+                          )}
+                          <span
+                            className="min-w-0 flex-1 truncate text-xs font-medium"
+                            title={layer.name}
+                          >
                             {layer.name}
                           </span>
 
@@ -717,6 +734,7 @@ mapRef.current?.clearFeatureSelection();
                           }`}
                         >
                           {layer.count} features
+                          {layer.kind === "discovery" && " · OpenStreetMap"}
                         </p>
 
                         <div className="mt-2 flex flex-wrap gap-1">
@@ -736,6 +754,23 @@ mapRef.current?.clearFeatureSelection();
                       </div>
                     ))}
                   </div>
+                )}
+
+                {importedLayers.some((layer) => layer.kind === "discovery") && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      mapRef.current?.clearDiscoveryLayers();
+                      refreshImportedLayers();
+                    }}
+                    className={`mt-3 w-full rounded-xl border px-3 py-2 text-xs transition-all ${
+                      isDark
+                        ? "border-white/10 bg-white/5 hover:border-red-400/25 hover:text-red-300"
+                        : "border-gray-200 bg-white/60 hover:border-red-500/25 hover:text-red-600"
+                    }`}
+                  >
+                    Clear Discovery Layers
+                  </button>
                 )}
               </section>
             </aside>

@@ -139,6 +139,15 @@ def test_closed_roundabout_stays_a_line_unless_area_yes():
     assert types == {"way/20": "LineString", "way/21": "Polygon"}
 
 
+def test_walled_park_is_polygon_despite_barrier_tag():
+    feature = discover(
+        [way(22, ring(77.21, 28.61, 0.001), leisure="park", barrier="wall")],
+        category="park",
+    )["features"][0]
+
+    assert feature["geometry"]["type"] == "Polygon"
+
+
 def test_multipolygon_relation_assembles_split_outer_ring_with_hole():
     outer = ring(77.20, 28.60, 0.02)
     relation = {

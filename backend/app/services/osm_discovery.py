@@ -222,13 +222,14 @@ CATEGORY_ALIASES = {
     "land_use": "landuse",
 }
 
-# Tags that make a closed way an area (vs. a closed line such as a roundabout).
+# Tags that make a closed way an area, even when it also carries a linear
+# tag (e.g. a park with barrier=wall). Closed ways without one, such as
+# highway roundabouts, stay lines.
 AREA_KEYS = {
     "building", "landuse", "leisure", "natural", "amenity", "aeroway",
     "tourism", "shop", "office", "healthcare", "historic", "man_made",
     "military", "place", "public_transport", "water", "sport",
 }
-LINEAR_KEYS = {"highway", "waterway", "barrier", "railway", "route"}
 LINEAR_NATURAL = {"coastline", "tree_row", "cliff", "ridge"}
 
 
@@ -307,9 +308,6 @@ def _is_area(tags: dict[str, str], coords: list[tuple[float, float]]) -> bool:
 
     if tags.get("waterway") in ("riverbank", "dock"):
         return True
-
-    if any(key in tags for key in LINEAR_KEYS):
-        return False
 
     return any(key in tags for key in AREA_KEYS)
 
