@@ -217,8 +217,15 @@ export default function FeatureInspector({
     feature.geometryType === "MultiLineString";
   const isAreal =
     feature.geometryType === "Polygon" || feature.geometryType === "MultiPolygon";
+  // Plain attributes for non-OSM layer features (e.g. coverage grid cells).
+  const attributes = osm
+    ? []
+    : Object.entries(feature.properties ?? {}).filter(
+        ([, value]) => value === null || typeof value !== "object",
+      );
   const featureTitle = String(
     osm?.display_name ??
+      (feature.properties?.cell_id ? `Grid cell ${feature.properties.cell_id}` : undefined) ??
       feature.properties?.name ??
       feature.properties?.Name ??
       nearestFeatureDetails?.properties.name ??
@@ -228,7 +235,9 @@ export default function FeatureInspector({
     ? "OpenStreetMap"
     : nearestFeatureDetails
       ? "Analysis result"
-      : "Drawn on map";
+      : feature.properties
+        ? "Map layer"
+        : "Drawn on map";
   const badgeClass = `rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${
     isDark
       ? "border-emerald-400/20 bg-emerald-400/8 text-emerald-300"
@@ -369,6 +378,24 @@ export default function FeatureInspector({
                 {osmTags.map(([key, value]) => (
                   <p key={key} className="break-words font-mono text-[11px]">
                     <span className="text-neutral-500">{key}</span> = {value}
+                  </p>
+                ))}
+              </div>
+            </InspectorSection>
+          )}
+
+          {attributes.length > 0 && (
+            <InspectorSection
+              isDark={isDark}
+              title="Attributes"
+              count={attributes.length}
+              defaultOpen={attributes.length <= 12}
+            >
+              <div className={`${cardClass} space-y-1`}>
+                {attributes.map(([key, value]) => (
+                  <p key={key} className="break-words font-mono text-[11px]">
+                    <span className="text-neutral-500">{key.replace(/_/g, " ")}</span> ={" "}
+                    {value === null ? "—" : String(value)}
                   </p>
                 ))}
               </div>

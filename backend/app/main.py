@@ -3,6 +3,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.config import get_settings
 from app.routers.analysis import router as analysis_router
 from app.routers.routing import router as routing_router
 from app.routers.agent import router as agent_router
@@ -33,10 +34,8 @@ async def limit_body_size(request: Request, call_next):
 # Added last so it wraps every response, including 413s.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    # Comma-separated CORS_ORIGINS, e.g. your Vercel URL; defaults to local Vite.
+    allow_origins=list(get_settings().cors_origins),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

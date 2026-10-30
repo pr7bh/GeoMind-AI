@@ -15,6 +15,7 @@ import Point from "ol/geom/Point";
 import VectorLayer from "ol/layer/Vector";
 import VectorSource from "ol/source/Vector";
 import { Circle, Fill, Stroke, Style, Text } from "ol/style";
+import type { StyleLike } from "ol/style/Style";
 import Draw from "ol/interaction/Draw";
 import type { DrawingMode } from "./DrawingToolbar";
 import Select from "ol/interaction/Select";
@@ -150,6 +151,14 @@ getNearestFeaturesInput: () => {
     collection: GeoJSONFeatureCollection,
     layerName: string,
   ) => ImportedLayerInfo;
+  /** Analysis layer coloured per feature by `property` (e.g. coverage class). */
+  addClassifiedLayer: (
+    collection: GeoJSONFeatureCollection,
+    layerName: string,
+    property: string,
+    palette: Record<string, string>,
+    outline?: string,
+  ) => ImportedLayerInfo;
   clearDiscoveryLayers: () => void;
 }
 
@@ -202,6 +211,13 @@ function pickMarkerStyle(role: PickMarkerRole) {
 function setViewportCursor(map: Map, cursor: string) {
   const viewport = map.getViewport();
   if (viewport) viewport.style.cursor = cursor;
+}
+
+function classifiedStyle(color: string, outline?: string) {
+  return new Style({
+    fill: new Fill({ color: `${color}59` }),
+    stroke: new Stroke({ color: outline ?? `${color}cc`, width: outline ? 1.25 : 0.75 }),
+  });
 }
 
 function discoveryStyle(color: string) {
@@ -260,9 +276,91 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
     geometryTypes: string[];
     kind: MapLayerKind;
     color?: string;
+    // Features can be clicked and opened in the inspector.
+    selectable?: boolean;
   }
 
   const importedLayersRef = useRef<ImportedLayerRecord[]>([]);
+
+  /** Validate GeoJSON and add it to the shared layer registry (selectable). */
+  function registerFeatureLayer(
+    collection: GeoJSONFeatureCollection,
+    layerName: string,
+    options: { kind: MapLayerKind; style: StyleLike; color?: string },
+  ): ImportedLayerInfo {
+    const map = mapInstance.current;
+
+    if (!map) {
+      throw new Error("Map is not ready yet.");
+    }
+
+    if (collection?.type !== "FeatureCollection" || !Array.isArray(collection.features)) {
+      throw new Error("The response is not a valid GeoJSON FeatureCollection.");
+    }
+
+    const supported = collection.features.filter((feature) =>
+      SUPPORTED_GEOMETRY_TYPES.has(feature?.geometry?.type ?? ""),
+    );
+
+    if (supported.length === 0) {
+      throw new Error("The response contains no supported geometries.");
+    }
+
+    const features = new GeoJSON().readFeatures(
+      { type: "FeatureCollection", features: supported },
+      {
+        dataProjection: "EPSG:4326",
+        featureProjection: "EPSG:3857",
+      },
+    );
+
+    const source = new VectorSource({ features });
+    const layer = new VectorLayer({
+      source,
+      zIndex: 100 + importedLayersRef.current.length,
+      style: options.style,
+    });
+
+    const geometryTypes = [
+      ...new Set(
+        features.map((feature) => feature.getGeometry()?.getType() ?? "Unknown"),
+      ),
+    ];
+    const record: ImportedLayerRecord = {
+      id: crypto.randomUUID(),
+      name: layerName,
+      source,
+      layer,
+      count: features.length,
+      geometryTypes,
+      kind: options.kind,
+      color: options.color,
+      selectable: true,
+    };
+
+    map.addLayer(layer);
+    importedLayersRef.current.push(record);
+
+    const extent = source.getExtent();
+
+    if (extent && !isEmpty(extent)) {
+      map.getView().fit(extent, {
+        padding: [80, 80, 80, 80],
+        duration: 600,
+        maxZoom: 17,
+      });
+    }
+
+    return {
+      id: record.id,
+      name: record.name,
+      count: record.count,
+      geometryTypes,
+      visible: true,
+      kind: record.kind,
+      color: record.color,
+    };
+  }
 
   useImperativeHandle(ref, () => ({
     zoomIn() {
@@ -1379,81 +1477,32 @@ getViewCenter() {
   return [longitude, latitude];
 },
 addDiscoveryLayer(collection, layerName) {
-  const map = mapInstance.current;
-
-  if (!map) {
-    throw new Error("Map is not ready yet.");
-  }
-
-  if (collection?.type !== "FeatureCollection" || !Array.isArray(collection.features)) {
-    throw new Error("The discovery response is not a valid GeoJSON FeatureCollection.");
-  }
-
-  const supported = collection.features.filter((feature) =>
-    SUPPORTED_GEOMETRY_TYPES.has(feature?.geometry?.type ?? ""),
-  );
-
-  if (supported.length === 0) {
-    throw new Error("The discovery response contains no supported geometries.");
-  }
-
-  const features = new GeoJSON().readFeatures(
-    { type: "FeatureCollection", features: supported },
-    {
-      dataProjection: "EPSG:4326",
-      featureProjection: "EPSG:3857",
-    },
-  );
-
   const discoveryCount = importedLayersRef.current.filter(
     (record) => record.kind === "discovery",
   ).length;
   const color = DISCOVERY_COLORS[discoveryCount % DISCOVERY_COLORS.length];
-  const source = new VectorSource({ features });
-  const layer = new VectorLayer({
-    source,
-    zIndex: 100 + importedLayersRef.current.length,
+
+  return registerFeatureLayer(collection, layerName, {
+    kind: "discovery",
+    color,
     style: discoveryStyle(color),
   });
-
-  const geometryTypes = [
-    ...new Set(
-      features.map((feature) => feature.getGeometry()?.getType() ?? "Unknown"),
-    ),
-  ];
-  const record: ImportedLayerRecord = {
-    id: crypto.randomUUID(),
-    name: layerName,
-    source,
-    layer,
-    count: features.length,
-    geometryTypes,
-    kind: "discovery",
-    color,
+},
+addClassifiedLayer(collection, layerName, property, palette, outline) {
+  const fallback = "#737373";
+  // One cached style per class ("Map" here is the OpenLayers map class).
+  const styles: Record<string, Style> = {};
+  const styleFor = (value: unknown) => {
+    const key = String(value);
+    styles[key] ??= classifiedStyle(palette[key] ?? fallback, outline);
+    return styles[key];
   };
 
-  map.addLayer(layer);
-  importedLayersRef.current.push(record);
-
-  const extent = source.getExtent();
-
-  if (extent && !isEmpty(extent)) {
-    map.getView().fit(extent, {
-      padding: [80, 80, 80, 80],
-      duration: 600,
-      maxZoom: 17,
-    });
-  }
-
-  return {
-    id: record.id,
-    name: record.name,
-    count: record.count,
-    geometryTypes,
-    visible: true,
-    kind: "discovery",
-    color,
-  };
+  return registerFeatureLayer(collection, layerName, {
+    kind: "analysis",
+    color: outline,
+    style: (feature) => styleFor(feature.get(property)),
+  });
 },
 clearDiscoveryLayers() {
   importedLayersRef.current
@@ -1615,7 +1664,7 @@ clearDiscoveryLayers() {
       layers: (layer) =>
         layer === drawingLayer ||
         importedLayersRef.current.some(
-          (record) => record.kind === "discovery" && record.layer === layer,
+          (record) => record.selectable && record.layer === layer,
         ),
       style: new Style({
         fill: new Fill({

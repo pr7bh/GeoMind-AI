@@ -278,9 +278,17 @@ def build_overpass_query(
     radius_metres: int,
     category: str,
 ) -> str:
-    around = f"(around:{radius_metres},{latitude},{longitude})"
+    return build_union_query([(longitude, latitude, radius_metres)], category)
+
+
+def build_union_query(
+    centres: list[tuple[float, float, int]],
+    category: str,
+) -> str:
+    """One query for features within each (lon, lat, radius_m) circle."""
     statements = "".join(
-        f"{selector}{around};"
+        f"{selector}(around:{radius},{lat},{lon});"
+        for lon, lat, radius in centres
         for selector in OSM_CATEGORIES[category]["selectors"]
     )
 
@@ -482,6 +490,61 @@ async def _fetch_overpass(
     return data
 
 
+def _elements_to_features(
+    elements: list[dict[str, Any]],
+    category: str,
+) -> tuple[list[dict[str, Any]], int]:
+    """Convert Overpass elements, dropping duplicates and unusable geometry."""
+    features = []
+    seen: set[tuple[str, int]] = set()
+    skipped = 0
+
+    for element in elements:
+        key = (element.get("type"), element.get("id"))
+
+        if key in seen:
+            continue
+        seen.add(key)
+
+        feature = _to_feature(element, category)
+
+        if feature is None:
+            skipped += 1
+            continue
+
+        features.append(feature)
+
+    return features, skipped
+
+
+async def discover_features_near(
+    centres: list[tuple[float, float, int]],
+    category: str,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """Features of one category near several points, in a single request.
+
+    Distances are left to the caller, which knows what each point stands for.
+    """
+    category = normalize_category(category)
+
+    for lon, lat, radius in centres:
+        _validate_origin([lon, lat])
+        if not (0 < radius <= OSM_CATEGORIES[category]["max_radius_km"] * 1000):
+            raise ValueError("Search radius is out of range for this category.")
+
+    osm_data = await _fetch_overpass(build_union_query(centres, category), client)
+    elements = osm_data.get("elements", [])
+    features, skipped = _elements_to_features(elements, category)
+
+    return {
+        "features": features,
+        "server_limit_reached": len(elements) >= MAX_ELEMENTS,
+        "skipped_without_geometry": skipped,
+        "osm_base": osm_data.get("osm3s", {}).get("timestamp_osm_base"),
+    }
+
+
 async def discover_features(
     coordinates: list[float],
     category: str,
@@ -504,25 +567,7 @@ async def discover_features(
     )
     osm_data = await _fetch_overpass(query, client)
     elements = osm_data.get("elements", [])
-
-    features = []
-    seen: set[tuple[str, int]] = set()
-    skipped = 0
-
-    for element in elements:
-        key = (element.get("type"), element.get("id"))
-
-        if key in seen:
-            continue
-        seen.add(key)
-
-        feature = _to_feature(element, category)
-
-        if feature is None:
-            skipped += 1
-            continue
-
-        features.append(feature)
+    features, skipped = _elements_to_features(elements, category)
 
     distances = {
         index: distance

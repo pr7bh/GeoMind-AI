@@ -9,7 +9,8 @@ export type PickOwner =
   | "routing"
   | "nearest"
   | "buffer"
-  | "spatial-query";
+  | "spatial-query"
+  | "agent";
 
 export type PickTarget =
   | "location"
@@ -17,7 +18,9 @@ export type PickTarget =
   | "destination"
   | "reference"
   | "center"
-  | "polygon";
+  | "polygon"
+  // Second study centre for Area A vs Area B comparisons.
+  | "compare";
 
 export interface ActivePick {
   owner: PickOwner;
@@ -57,6 +60,7 @@ const MARKER_ROLES: Record<PickTarget, PickMarkerRole> = {
   location: "location",
   center: "location",
   polygon: "location",
+  compare: "destination",
 };
 
 interface DrawingControl {
