@@ -16,11 +16,11 @@ logger = logging.getLogger(__name__)
 
 # Public Overpass instances, tried in order when one is unreachable or busy.
 # OVERPASS_URL may override this with one URL or a comma-separated list.
+# (Mirrors that accept connections but then hang are left out: a hang costs
+# the full read timeout and is not retried elsewhere.)
 DEFAULT_OVERPASS_URLS = (
     "https://overpass-api.de/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-    "https://overpass.private.coffee/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter",
 )
 
 
