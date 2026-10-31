@@ -316,3 +316,61 @@ def test_features_endpoint_success_and_errors(monkeypatch):
     assert post(category="building", radius_km=10).status_code == 400
     assert post(category="hospital", radius_km=500).status_code == 422
     assert post(category="police").status_code == 503
+
+
+# Overpass instance fallback
+
+MIRRORS = ("https://a.example/api/interpreter", "https://b.example/api/interpreter")
+
+
+def mirror_client(behaviour, calls):
+    def handler(request):
+        host = request.url.host
+        calls.append(host)
+        outcome = behaviour[host]
+        if isinstance(outcome, Exception):
+            raise outcome
+        if isinstance(outcome, int):
+            return httpx.Response(outcome)
+        return httpx.Response(200, json=outcome)
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+OK = {"osm3s": {"timestamp_osm_base": "2026-10-30T00:00:00Z"}, "elements": [
+    {"type": "node", "id": 1, "lat": CENTER[1] + 0.001, "lon": CENTER[0], "tags": {"amenity": "hospital"}},
+]}
+
+
+@pytest.mark.parametrize("first", [httpx.ConnectError("refused"), httpx.ConnectTimeout("slow"), 429, 502, 503, 504])
+def test_unreachable_or_busy_instance_falls_back(monkeypatch, first):
+    monkeypatch.setattr(od, "OVERPASS_URLS", MIRRORS)
+    calls = []
+    data = asyncio.run(od.discover_features(CENTER, "hospital", client=mirror_client({"a.example": first, "b.example": OK}, calls)))
+    assert calls == ["a.example", "b.example"] and data["metadata"]["returned"] == 1
+
+
+def test_all_instances_failing_reports_last_error(monkeypatch):
+    monkeypatch.setattr(od, "OVERPASS_URLS", MIRRORS)
+    calls = []
+    client = mirror_client({"a.example": httpx.ConnectError("refused"), "b.example": 503}, calls)
+    with pytest.raises(od.OverpassError) as info:
+        asyncio.run(od.discover_features(CENTER, "hospital", client=client))
+    assert calls == ["a.example", "b.example"] and info.value.status_code == 503
+
+
+@pytest.mark.parametrize("first,status", [(httpx.ReadTimeout("heavy"), 504), (400, 502)])
+def test_query_problems_are_not_retried_elsewhere(monkeypatch, first, status):
+    monkeypatch.setattr(od, "OVERPASS_URLS", MIRRORS)
+    calls = []
+    with pytest.raises(od.OverpassError) as info:
+        asyncio.run(od.discover_features(CENTER, "hospital", client=mirror_client({"a.example": first, "b.example": OK}, calls)))
+    assert calls == ["a.example"] and info.value.status_code == status
+
+
+def test_overpass_url_env_accepts_a_list():
+    assert od.parse_overpass_urls(" https://x.example/api , https://y.example/api ") == (
+        "https://x.example/api", "https://y.example/api",
+    )
+    assert od.parse_overpass_urls("") == od.DEFAULT_OVERPASS_URLS
+    assert od.parse_overpass_urls(None) == od.DEFAULT_OVERPASS_URLS
