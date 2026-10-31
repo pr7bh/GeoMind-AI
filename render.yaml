@@ -1,0 +1,28 @@
+# Render Blueprint for the GeoMind AI backend (Free web service).
+# Render dashboard → New → Blueprint → select this repository.
+services:
+  - type: web
+    name: geomind-ai-backend
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      # Your Vercel URL, e.g. https://geomind-ai.vercel.app (comma-separate several).
+      - key: CORS_ORIGINS
+        sync: false
+      # none | remote. Never ollama on Render.
+      - key: LLM_PROVIDER
+        value: none
+      # Only needed when LLM_PROVIDER=remote (OpenAI-compatible API).
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        sync: false

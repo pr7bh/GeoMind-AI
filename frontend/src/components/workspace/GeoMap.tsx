@@ -1,10 +1,13 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { LoaderCircle, LocateFixed, MapPinOff } from "lucide-react";
 import type {
   Feature as GeoJSONFeature,
   FeatureCollection as GeoJSONFeatureCollection,
   Geometry,
 } from "geojson";
 import Map from "ol/Map";
+import Overlay from "ol/Overlay";
+import { easeOut, inAndOut } from "ol/easing";
 import View from "ol/View";
 import TileLayer from "ol/layer/Tile";
 import XYZ from "ol/source/XYZ";
@@ -12,6 +15,7 @@ import "ol/ol.css";
 import { fromLonLat, toLonLat, transform } from "ol/proj";
 import Feature from "ol/Feature";
 import Point from "ol/geom/Point";
+import { circular } from "ol/geom/Polygon";
 import VectorLayer from "ol/layer/Vector";
 import VectorSource from "ol/source/Vector";
 import { Circle, Fill, Stroke, Style, Text } from "ol/style";
@@ -240,6 +244,53 @@ function discoveryStyle(color: string) {
 
 const INITIAL_CENTER: [number, number] = [0, 0];
 const INITIAL_ZOOM = 2;
+const USER_LOCATION_ZOOM = 14;
+const FLY_DURATION_MS = 2200;
+
+type LocationStatus = "locating" | "found" | "denied" | "unavailable";
+
+const LOCATION_MESSAGES: Record<LocationStatus, string> = {
+  locating: "Locating you…",
+  found: "You are here",
+  denied: "Location access is blocked. Allow it in your browser to start the map at your position.",
+  unavailable: "Your location could not be found, so the map shows the world view.",
+};
+
+/** Animated flight: pans while zooming, arcing out a little for short hops. */
+function flyTo(view: View, center: number[], zoom: number, duration = FLY_DURATION_MS) {
+  const startZoom = view.getZoom() ?? zoom;
+  view.cancelAnimations();
+
+  if (Math.abs(startZoom - zoom) < 3) {
+    view.animate({ center, duration, easing: inAndOut });
+    view.animate(
+      { zoom: Math.min(startZoom, zoom) - 1.5, duration: duration / 2, easing: easeOut },
+      { zoom, duration: duration / 2, easing: inAndOut },
+    );
+    return;
+  }
+
+  // Long zoom-in: settle on the target early, then zoom in smoothly.
+  view.animate({ center, duration: duration * 0.6, easing: easeOut });
+  view.animate({ zoom, duration, easing: inAndOut });
+}
+
+/** Live location marker: a dot with a pulsing ring (CSS animation). */
+function createUserLocationElement() {
+  const element = document.createElement("div");
+  element.className = "pointer-events-none relative flex h-6 w-6 items-center justify-center";
+  element.setAttribute("aria-label", "Your location");
+
+  const ping = document.createElement("span");
+  ping.className = "absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-500/60";
+
+  const dot = document.createElement("span");
+  dot.className =
+    "relative inline-flex h-3.5 w-3.5 rounded-full border-2 border-white bg-blue-500 shadow-[0_0_14px_rgba(59,130,246,0.85)]";
+
+  element.append(ping, dot);
+  return element;
+}
 
 const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
   { theme },
@@ -247,6 +298,10 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
 ) {
   const mapElement = useRef<HTMLDivElement | null>(null);
   const mapInstance = useRef<Map | null>(null);
+  const [locationStatus, setLocationStatus] = useState<LocationStatus>(() =>
+    "geolocation" in navigator ? "locating" : "unavailable",
+  );
+  const [locationStatusVisible, setLocationStatusVisible] = useState(true);
 
   const baseLayers = useRef<{
     light: TileLayer<XYZ>;
@@ -269,6 +324,8 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
   const pickRestoreCursorRef = useRef("");
   const pickMarkerSourceRef = useRef<VectorSource | null>(null);
   const routeLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
+  // Latest browser geolocation fix (map projection), if permission was given.
+  const userLocationRef = useRef<number[] | null>(null);
 
   const onFeatureSelectRef = useRef<
     ((feature: SelectedFeatureInfo | null) => void) | null
@@ -390,11 +447,15 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
     },
 
     resetView() {
-      mapInstance.current?.getView().animate({
-        center: INITIAL_CENTER,
-        zoom: INITIAL_ZOOM,
-        duration: 300,
-      });
+      const view = mapInstance.current?.getView();
+      const userLocation = userLocationRef.current;
+      if (!view) return;
+
+      if (userLocation) {
+        flyTo(view, userLocation, USER_LOCATION_ZOOM, 1200);
+      } else {
+        view.animate({ center: INITIAL_CENTER, zoom: INITIAL_ZOOM, duration: 300 });
+      }
     },
 
     toggleBaseLayer(visible) {
@@ -1600,9 +1661,25 @@ clearDiscoveryLayers() {
       dark: darkLayer,
     };
 
+    // Live location: accuracy circle (vector) plus a pulsing dot (overlay).
+    const userLocationSource = new VectorSource();
+    const userLocationLayer = new VectorLayer({
+      source: userLocationSource,
+      zIndex: 95,
+      style: new Style({
+        fill: new Fill({ color: "rgba(59, 130, 246, 0.12)" }),
+        stroke: new Stroke({ color: "rgba(59, 130, 246, 0.45)", width: 1 }),
+      }),
+    });
+    const userLocationOverlay = new Overlay({
+      element: createUserLocationElement(),
+      positioning: "center-center",
+      stopEvent: false,
+    });
+
     const map = new Map({
       target: mapElement.current,
-      layers: [lightLayer, darkLayer, drawingLayer, markerLayer, pickMarkerLayer],
+      layers: [lightLayer, darkLayer, drawingLayer, userLocationLayer, markerLayer, pickMarkerLayer],
       view: new View({
         center: INITIAL_CENTER,
         zoom: INITIAL_ZOOM,
@@ -1610,6 +1687,48 @@ clearDiscoveryLayers() {
     });
 
     mapInstance.current = map;
+    map.addOverlay(userLocationOverlay);
+
+    // Start at the user's live location when the browser allows it; without
+    // permission (or on failure) the world view stays.
+    let centredOnUser = false;
+    const watchId =
+      "geolocation" in navigator
+        ? navigator.geolocation.watchPosition(
+            ({ coords }) => {
+              const lonLat = [coords.longitude, coords.latitude];
+              const coordinate = fromLonLat(lonLat);
+              userLocationRef.current = coordinate;
+              userLocationSource.clear();
+              userLocationSource.addFeature(
+                new Feature({
+                  geometry: circular(lonLat, Math.max(coords.accuracy, 1), 64).transform(
+                    "EPSG:4326",
+                    "EPSG:3857",
+                  ),
+                }),
+              );
+              userLocationOverlay.setPosition(coordinate);
+
+              if (centredOnUser) return;
+              centredOnUser = true;
+              setLocationStatus("found");
+
+              // Fly in once, and only if the user has not zoomed in already.
+              const zoom = map.getView().getZoom() ?? INITIAL_ZOOM;
+              if (zoom < INITIAL_ZOOM + 0.5) {
+                flyTo(map.getView(), coordinate, USER_LOCATION_ZOOM);
+              }
+            },
+            (error) => {
+              // Later watch errors keep the last known position.
+              if (!centredOnUser) {
+                setLocationStatus(error.code === error.PERMISSION_DENIED ? "denied" : "unavailable");
+              }
+            },
+            { enableHighAccuracy: true, maximumAge: 30000, timeout: 20000 },
+          )
+        : null;
 
     map.on("singleclick", (event) => {
       const [longitude, latitude] = toLonLat(event.coordinate);
@@ -1747,6 +1866,9 @@ clearDiscoveryLayers() {
       });
     });
     return () => {
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+      map.removeOverlay(userLocationOverlay);
+
       if (drawInteractionRef.current) {
         map.removeInteraction(drawInteractionRef.current);
       }
@@ -1770,10 +1892,52 @@ clearDiscoveryLayers() {
       nearestFeatureLayerRef.current = null;
       nearestOriginLayerRef.current = null;
       routeLayerRef.current = null;
+      userLocationRef.current = null;
     };
   }, []);
 
-  return <div ref={mapElement} className="h-full w-full" />;
+  // Fade the location status out once it has been read.
+  useEffect(() => {
+    if (locationStatus === "locating") return;
+    const timer = window.setTimeout(
+      () => setLocationStatusVisible(false),
+      locationStatus === "found" ? 2500 : 6000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [locationStatus]);
+
+  const isDark = theme === "dark";
+  const StatusIcon =
+    locationStatus === "locating" ? LoaderCircle : locationStatus === "found" ? LocateFixed : MapPinOff;
+
+  return (
+    <div className="relative h-full w-full">
+      <div ref={mapElement} className="h-full w-full" />
+      <div
+        role="status"
+        aria-live="polite"
+        className={`pointer-events-none absolute bottom-24 left-1/2 z-10 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-2 rounded-full border px-3.5 py-2 text-xs font-medium shadow-lg backdrop-blur-xl transition-all duration-500 ease-out ${
+          locationStatusVisible ? "translate-y-0 opacity-100" : "translate-y-3 opacity-0"
+        } ${
+          isDark
+            ? "border-white/10 bg-neutral-950/80 text-neutral-100"
+            : "border-gray-200/80 bg-white/90 text-gray-900"
+        }`}
+      >
+        <StatusIcon
+          size={14}
+          className={`shrink-0 ${
+            locationStatus === "locating"
+              ? "animate-spin text-sky-500"
+              : locationStatus === "found"
+                ? "text-blue-500"
+                : "text-amber-500"
+          }`}
+        />
+        {LOCATION_MESSAGES[locationStatus]}
+      </div>
+    </div>
+  );
 });
 
 export default GeoMap;
