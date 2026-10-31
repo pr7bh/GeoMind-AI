@@ -29,6 +29,12 @@ def ring(x0, y0, size):
     return [(x0, y0), (x0 + size, y0), (x0 + size, y0 + size), (x0, y0 + size), (x0, y0)]
 
 
+@pytest.fixture(autouse=True)
+def instant_retries(monkeypatch):
+    """Keep the busy-retry rounds, without real waiting."""
+    monkeypatch.setattr(od, "BUSY_RETRY_DELAYS", (0.0, 0.0))
+
+
 def overpass_client(payload=None, status=200, exc=None, captured=None):
     def handler(request: httpx.Request):
         if captured is not None:
@@ -356,7 +362,31 @@ def test_all_instances_failing_reports_last_error(monkeypatch):
     client = mirror_client({"a.example": httpx.ConnectError("refused"), "b.example": 503}, calls)
     with pytest.raises(od.OverpassError) as info:
         asyncio.run(od.discover_features(CENTER, "hospital", client=client))
-    assert calls == ["a.example", "b.example"] and info.value.status_code == 503
+    # Every instance is tried in each of the three rounds before giving up.
+    assert calls == ["a.example", "b.example"] * 3 and info.value.status_code == 503
+
+
+def test_busy_instances_are_retried_after_a_pause(monkeypatch):
+    monkeypatch.setattr(od, "OVERPASS_URLS", MIRRORS)
+    calls, responses = [], iter([429, 503, 200])
+
+    def handler(request):
+        calls.append(request.url.host)
+        status = next(responses)
+        return httpx.Response(status, json=OK) if status == 200 else httpx.Response(status)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    data = asyncio.run(od.discover_features(CENTER, "hospital", client=client))
+    assert calls == ["a.example", "b.example", "a.example"] and data["metadata"]["returned"] == 1
+
+
+def test_timeouts_are_never_retried(monkeypatch):
+    monkeypatch.setattr(od, "OVERPASS_URLS", MIRRORS)
+    calls = []
+    client = mirror_client({"a.example": httpx.ReadTimeout("slow"), "b.example": OK}, calls)
+    with pytest.raises(od.OverpassError):
+        asyncio.run(od.discover_features(CENTER, "hospital", client=client))
+    assert calls == ["a.example"]
 
 
 @pytest.mark.parametrize("first,status", [(httpx.ReadTimeout("heavy"), 504), (400, 502)])

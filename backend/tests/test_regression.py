@@ -253,7 +253,8 @@ def test_m4_llm_discovery_buffer_and_spatial_query(overpass, monkeypatch):
         LLMResponse("", [tool_call("spatial_query", {"operation": "within"}, "c")]),
         LLMResponse("1 hospital lies within 1.5 km."),
     ))
-    data = ask("Which hospitals are within 1.5 km of here?").json()
+    # Wording the deterministic rules cannot answer, so the LLM tool chain runs.
+    data = ask("Are any hospitals inside a 1.5 km buffer around here?").json()
     assert data["mode"] == "llm" and data["success"] is True
     assert [s["tool"] for s in data["steps"]] == ["discover_features", "create_buffer", "spatial_query"]
     assert all(s["status"] == "completed" for s in data["steps"])

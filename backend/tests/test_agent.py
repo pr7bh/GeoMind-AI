@@ -227,6 +227,9 @@ def test_buffer_then_spatial_query_chain(overpass):
     ("list parks in 1.5 kilometres", ("park", 1.5)),
     ("find unicorns within 5 km", None),
     ("which hospital is best for children?", None),
+    ("Which parks are within 1 km, and which is nearest?", ("park", 1.0)),
+    ("What schools are in 2 km?", ("school", 2.0)),
+    ("Which hospital is nearest?", None),
 ])
 def test_parse_discovery_request(message, expected):
     assert parse_discovery_request(message) == expected
@@ -331,3 +334,22 @@ def test_api_rejects_oversized_message_and_bad_coordinates():
 def test_status_endpoint(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "none")
     assert client.get("/api/agent/status").json()["configured"] is False
+
+
+def test_which_question_is_answered_without_llm_even_with_map_features(overpass, no_llm):
+    features = [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.21, 28.63]}, "properties": {}}]
+    response = client.post("/api/agent/chat", json={
+        "message": "Which parks are within 1 km, and which is nearest?",
+        "coordinates": list(DELHI), "features": features,
+    }).json()
+    assert response["intent"] == "discover_features" and response["mode"] == "deterministic"
+    assert response["error_code"] is None and "Nearest" in response["message"]
+    assert "park" in overpass.queries[0]
+
+
+def test_nearest_without_category_still_ranks_map_features(no_llm):
+    features = [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [77.21, 28.63]}, "properties": {}}]
+    response = client.post("/api/agent/chat", json={
+        "message": "Which hospital is nearest?", "coordinates": list(DELHI), "features": features,
+    }).json()
+    assert response["intent"] == "nearest_features"

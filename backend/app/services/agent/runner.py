@@ -245,9 +245,18 @@ _FAST_PATTERN = re.compile(
 )
 
 
+# "Which parks are within 1 km (and which is nearest)?"
+_WHICH_PATTERN = re.compile(
+    r"^\s*(?:which|what)\s+(?:are\s+the\s+)?(?P<category>[a-z][a-z \-]{1,40}?)\s+(?:are|is)\s+"
+    r"(?:there\s+)?(?:within|in|inside)\s+(?:a\s+)?(?P<radius>\d+(?:\.\d+)?)\s*"
+    r"(?P<unit>km|kms|kilometers?|kilometres?|m|meters?|metres?)\b",
+    re.IGNORECASE,
+)
+
+
 def parse_discovery_request(message: str) -> tuple[str, float] | None:
     """Return (category, radius_km) for simple, unambiguous discovery requests."""
-    match = _FAST_PATTERN.match(message)
+    match = _FAST_PATTERN.match(message) or _WHICH_PATTERN.match(message)
 
     if not match:
         return None

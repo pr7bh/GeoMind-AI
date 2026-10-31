@@ -279,7 +279,10 @@ async def handle_chat(request: AgentRequest, emit: Emit = _noop) -> AgentRespons
             },
         )
 
-    if intent == "nearest_features" and request.features is not None:
+    # Ranks the caller's own map features; a question naming a category and
+    # radius ("which parks are within 1 km, and which is nearest?") is a
+    # discovery request instead and is handled by the direct path below.
+    if intent == "nearest_features" and request.features is not None and parse_discovery_request(request.message) is None:
         missing = []
 
         if request.coordinates is None:

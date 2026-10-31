@@ -1,5 +1,6 @@
 """Real-world feature discovery from OpenStreetMap via the Overpass API."""
 
+import asyncio
 import logging
 import os
 from typing import Any
@@ -30,9 +31,13 @@ def parse_overpass_urls(value: str | None) -> tuple[str, ...]:
 
 OVERPASS_URLS = parse_overpass_urls(os.getenv("OVERPASS_URL"))
 USER_AGENT = "GeoMind-AI/0.2"
-REQUEST_TIMEOUT_SECONDS = 40.0
+REQUEST_TIMEOUT_SECONDS = 55.0
 # Unreachable instances fail fast so the next one can be tried.
 CONNECT_TIMEOUT_SECONDS = 10.0
+# Public instances are often briefly saturated: when every instance is busy
+# or unreachable, pause and try them all again (bounded; slow queries that
+# time out are never repeated).
+BUSY_RETRY_DELAYS = (2.0, 5.0)
 QUERY_TIMEOUT_SECONDS = 30
 # Hard cap on elements Overpass may return for one query.
 MAX_ELEMENTS = 3000
@@ -458,31 +463,36 @@ def _to_feature(element: dict[str, Any], category: str) -> dict[str, Any] | None
 async def _post_with_fallback(client: httpx.AsyncClient, query: str) -> httpx.Response:
     """POST to each Overpass instance in turn until one answers.
 
-    Falls over only when an instance is unreachable or busy (429/502-504).
-    A read timeout is not retried elsewhere: the query itself is too heavy.
+    Falls over only when an instance is unreachable or busy (429/502-504);
+    if all of them are, waits briefly and tries them all again. A read
+    timeout is not retried: the query itself is too heavy.
     """
     error: OverpassError | None = None
 
-    for url in OVERPASS_URLS:
-        try:
-            response = await client.post(url, data={"data": query})
-        except httpx.ConnectTimeout as exc:
-            error = OverpassError("Unable to connect to the Overpass API.", 502)
-            error.__cause__ = exc
-        except httpx.TimeoutException as exc:
-            raise OverpassError(
-                "OpenStreetMap discovery timed out. Try a smaller radius.", 504
-            ) from exc
-        except httpx.RequestError as exc:
-            error = OverpassError("Unable to connect to the Overpass API.", 502)
-            error.__cause__ = exc
-        else:
-            # 429 is rate limiting; 502-504 mean the instance is overloaded.
-            if response.status_code not in (429, 502, 503, 504):
-                return response
-            error = OverpassError("The Overpass API is busy. Please retry in a moment.", 503)
+    for attempt, delay in enumerate((0.0, *BUSY_RETRY_DELAYS)):
+        if delay:
+            logger.warning("All Overpass instances busy; retrying in %.0f s", delay)
+            await asyncio.sleep(delay)
+        for url in OVERPASS_URLS:
+            try:
+                response = await client.post(url, data={"data": query})
+            except httpx.ConnectTimeout as exc:
+                error = OverpassError("Unable to connect to the Overpass API.", 502)
+                error.__cause__ = exc
+            except httpx.TimeoutException as exc:
+                raise OverpassError(
+                    "OpenStreetMap discovery timed out. Try a smaller radius.", 504
+                ) from exc
+            except httpx.RequestError as exc:
+                error = OverpassError("Unable to connect to the Overpass API.", 502)
+                error.__cause__ = exc
+            else:
+                # 429 is rate limiting; 502-504 mean the instance is overloaded.
+                if response.status_code not in (429, 502, 503, 504):
+                    return response
+                error = OverpassError("The Overpass API is busy. Please retry in a moment.", 503)
 
-        logger.warning("Overpass instance %s failed (%s)", httpx.URL(url).host, error)
+            logger.warning("Overpass instance %s failed (%s, attempt %d)", httpx.URL(url).host, error, attempt + 1)
 
     assert error is not None
     raise error

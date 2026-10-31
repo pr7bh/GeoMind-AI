@@ -871,6 +871,40 @@ const setMode = (base, mode) => fetch(`${base}/mode/${mode}`);
     }
   });
 
+  await journey("42. Example prompts work without a selected location", async () => {
+    const fresh = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const other = await fresh.newPage();
+    await other.route((url) => !["localhost", "127.0.0.1"].includes(url.hostname), (route) =>
+      route.fulfill({ status: 200, contentType: route.request().url().includes("fonts.googleapis") ? "text/css" : "image/png", body: "" }));
+    try {
+      await other.goto(WEB);
+      await other.getByRole("button", { name: "Ask AI" }).first().click();
+      await other.getByText("Pick a point for location questions").waitFor(); // nothing selected
+      await other.getByRole("button", { name: "Find schools within 2 km" }).click();
+      const schools = other.locator("article").last();
+      await schools.getByText("Completed · direct (no LLM)").waitFor();
+      check((await schools.getByText("Select a location on the map first").count()) === 0, "example asked for a location");
+      await schools.getByText(/schools? within 2 km/i).first().waitFor();
+
+      await other.locator("#research-question").fill("Which parks are within 1 km, and which is nearest?");
+      await other.locator("#research-question").press("Enter");
+      const parks = other.locator("article").last();
+      await parks.getByText(/Nearest/).first().waitFor();
+      check((await parks.getByText(/not configured/).count()) === 0, "parks question needed an LLM");
+
+      await other.getByRole("button", { name: "Clear analysis location" }).click();
+      await other.locator("#research-question").fill("Find hospitals within 5 km");
+      await other.locator("#research-question").press("Enter");
+      const retry = other.locator("article").last();
+      await retry.getByRole("button", { name: "Use map centre and ask again" }).click();
+      const answered = other.locator("article").last();
+      await answered.getByText(/hospitals within 5 km/i).first().waitFor();
+      check((await answered.getByText("Select a location on the map first").count()) === 0, "retry still lacked a location");
+    } finally {
+      await fresh.close();
+    }
+  });
+
   await journey("Phone width has no horizontal scroll", async () => {
     await page.setViewportSize({ width: 390, height: 844 });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

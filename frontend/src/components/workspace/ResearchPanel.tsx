@@ -26,7 +26,12 @@ import {
   planResearch,
   synthesizeExecution,
 } from "../../lib/researchClient";
-import type { ExecutionEvent, ResearchPlan, ResearchSynthesis, SessionDetail } from "../../lib/researchClient";
+import type {
+  ExecutionEvent,
+  ResearchPlan,
+  ResearchSynthesis,
+  SessionDetail,
+} from "../../lib/researchClient";
 import type {
   AgentLayer,
   AgentResponse,
@@ -95,7 +100,11 @@ interface Turn {
   // Present once the user approved and started executing the plan.
   execution: ExecutionUIState | null;
   // Evidence-based synthesis of a finished execution (on request).
-  insights: { loading: boolean; data: ResearchSynthesis | null; error: string | null } | null;
+  insights: {
+    loading: boolean;
+    data: ResearchSynthesis | null;
+    error: string | null;
+  } | null;
   error: string | null;
   addedLayers: number[];
   addedResultLayers: string[];
@@ -116,7 +125,9 @@ const VIEW_KEY = "geomind-research-view";
 
 function readView(): "conversation" | "workspace" {
   try {
-    return localStorage.getItem(VIEW_KEY) === "workspace" ? "workspace" : "conversation";
+    return localStorage.getItem(VIEW_KEY) === "workspace"
+      ? "workspace"
+      : "conversation";
   } catch {
     return "conversation";
   }
@@ -179,7 +190,9 @@ export default function ResearchPanel({
 
   function updateTurn(id: number, change: (turn: Turn) => Partial<Turn>) {
     setTurns((current) =>
-      current.map((turn) => (turn.id === id ? { ...turn, ...change(turn) } : turn)),
+      current.map((turn) =>
+        turn.id === id ? { ...turn, ...change(turn) } : turn,
+      ),
     );
   }
 
@@ -194,21 +207,39 @@ export default function ResearchPanel({
       onRouteResult?.(result as RouteResult);
     }
 
-    if (response.intent === "nearest_features" && Array.isArray(result?.results)) {
+    if (
+      response.intent === "nearest_features" &&
+      Array.isArray(result?.results)
+    ) {
       const origin = result.origin?.coordinates;
       const features = result.results
         .map((item: { feature?: GeoJSONFeature }) => item.feature)
-        .filter((feature: GeoJSONFeature | undefined): feature is GeoJSONFeature =>
-          Boolean(feature?.geometry),
+        .filter(
+          (feature: GeoJSONFeature | undefined): feature is GeoJSONFeature =>
+            Boolean(feature?.geometry),
         );
 
       if (Array.isArray(origin) && features.length > 0) {
-        onNearestFeaturesResult?.([Number(origin[0]), Number(origin[1])], features);
+        onNearestFeaturesResult?.(
+          [Number(origin[0]), Number(origin[1])],
+          features,
+        );
       }
     }
   }
 
-  async function ask(message: string, suitability?: SuitabilityOptions) {
+  /** Use the current map centre as the analysis location; returns it. */
+  function takeMapCentre(): [number, number] | null {
+    picker.cancel("agent");
+    const centre = mapRef.current?.getViewCenter() ?? null;
+    if (centre) {
+      setLocation(centre);
+      picker.setMarker("agent", "location", centre);
+    }
+    return centre;
+  }
+
+  async function ask(message: string, suitability?: SuitabilityOptions, at?: [number, number] | null) {
     if (!message || busy) return;
 
     const id = nextId.current++;
@@ -244,7 +275,8 @@ export default function ResearchPanel({
     );
     const nearestInput = wantsNearest ? getNearestFeaturesInput?.() : null;
 
-    if (location) payload.coordinates = location;
+    const origin = at ?? location;
+    if (origin) payload.coordinates = origin;
     else if (nearestInput) payload.coordinates = nearestInput.coordinates;
     if (areaB) payload.compare_coordinates = areaB;
     if (suitability) payload.suitability = suitability;
@@ -263,7 +295,10 @@ export default function ResearchPanel({
           if (event.type === "thinking") {
             updateTurn(id, () => ({ status: "thinking", runningTool: null }));
           } else if (event.type === "tool_started") {
-            updateTurn(id, () => ({ status: "running", runningTool: event.tool }));
+            updateTurn(id, () => ({
+              status: "running",
+              runningTool: event.tool,
+            }));
           } else if (event.type === "tool_finished") {
             updateTurn(id, (turn) => ({
               runningTool: null,
@@ -277,7 +312,9 @@ export default function ResearchPanel({
               return {
                 status: "running",
                 runningTool: step?.description ?? event.step_id,
-                plan: patchStep(turn.plan, event.step_id, { status: "running" }),
+                plan: patchStep(turn.plan, event.step_id, {
+                  status: "running",
+                }),
               };
             });
           } else if (event.type === "step_completed") {
@@ -293,11 +330,17 @@ export default function ResearchPanel({
           } else if (event.type === "step_failed") {
             updateTurn(id, (turn) => ({
               runningTool: null,
-              plan: patchStep(turn.plan, event.step_id, { status: "failed", error: event.error }),
+              plan: patchStep(turn.plan, event.step_id, {
+                status: "failed",
+                error: event.error,
+              }),
             }));
           } else if (event.type === "step_skipped") {
             updateTurn(id, (turn) => ({
-              plan: patchStep(turn.plan, event.step_id, { status: "skipped", error: event.reason }),
+              plan: patchStep(turn.plan, event.step_id, {
+                status: "skipped",
+                error: event.reason,
+              }),
             }));
           }
         },
@@ -340,7 +383,10 @@ export default function ResearchPanel({
   }
 
   /** Research planning: returns a validated plan; never runs a step. */
-  async function planQuestion(message: string, existingSessionId: string | null = null) {
+  async function planQuestion(
+    message: string,
+    existingSessionId: string | null = null,
+  ) {
     if (!message || busy) return;
 
     const id = nextId.current++;
@@ -394,7 +440,10 @@ export default function ResearchPanel({
           ? { status: "cancelled" }
           : {
               status: "failed",
-              error: error instanceof Error ? error.message : "Unable to create a research plan.",
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Unable to create a research plan.",
             },
       );
     } finally {
@@ -403,7 +452,11 @@ export default function ResearchPanel({
   }
 
   /** Run an approved plan; progress streams into the turn's execution state. */
-  async function executePlan(turnId: number, researchPlan: ResearchPlan, sessionId: string | null) {
+  async function executePlan(
+    turnId: number,
+    researchPlan: ResearchPlan,
+    sessionId: string | null,
+  ) {
     if (busy) return;
 
     const controller = new AbortController();
@@ -429,7 +482,10 @@ export default function ResearchPanel({
         (event) =>
           updateTurn(turnId, (turn) => {
             const execution = applyExecutionEvent(turn.execution!, event);
-            const title = researchPlan.steps.find((step) => step.id === execution.currentStep)?.title ?? null;
+            const title =
+              researchPlan.steps.find(
+                (step) => step.id === execution.currentStep,
+              )?.title ?? null;
             return { execution, runningTool: title };
           }),
         controller.signal,
@@ -442,7 +498,9 @@ export default function ResearchPanel({
           ...turn.execution!,
           status: summary.status,
           currentStep: null,
-          steps: Object.fromEntries(summary.steps.map(({ id, ...step }) => [id, step])),
+          steps: Object.fromEntries(
+            summary.steps.map(({ id, ...step }) => [id, step]),
+          ),
           warnings: summary.warnings,
           errors: summary.errors,
           results: summary.results,
@@ -500,17 +558,24 @@ export default function ResearchPanel({
 
   /** Synthesis reads the execution's retained evidence; nothing is re-run. */
   async function generateInsights(turnId: number, executionId: string) {
-    updateTurn(turnId, () => ({ insights: { loading: true, data: null, error: null } }));
+    updateTurn(turnId, () => ({
+      insights: { loading: true, data: null, error: null },
+    }));
     try {
       const data = await synthesizeExecution(executionId);
-      updateTurn(turnId, () => ({ insights: { loading: false, data, error: null } }));
+      updateTurn(turnId, () => ({
+        insights: { loading: false, data, error: null },
+      }));
       setSessionsVersion((version) => version + 1);
     } catch (error) {
       updateTurn(turnId, () => ({
         insights: {
           loading: false,
           data: null,
-          error: error instanceof Error ? error.message : "Unable to generate research insights.",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unable to generate research insights.",
         },
       }));
     }
@@ -519,7 +584,10 @@ export default function ResearchPanel({
   /** Graceful cancel for research (keeps completed results); abort otherwise. */
   function cancelActive() {
     const executing = turns.find(
-      (turn) => turn.execution && (turn.execution.status === "running" || turn.execution.status === "queued"),
+      (turn) =>
+        turn.execution &&
+        (turn.execution.status === "running" ||
+          turn.execution.status === "queued"),
     );
     const executionId = executing?.execution?.id;
     if (executionId) {
@@ -530,11 +598,21 @@ export default function ResearchPanel({
   }
 
   function pickLocation() {
-    picker.pickPoint("agent", "location", "Click the map to set the agent's analysis location", setLocation);
+    picker.pickPoint(
+      "agent",
+      "location",
+      "Click the map to set the agent's analysis location",
+      setLocation,
+    );
   }
 
   function pickAreaB() {
-    picker.pickPoint("agent", "compare", "Click the map to set Area B for the comparison", setAreaB);
+    picker.pickPoint(
+      "agent",
+      "compare",
+      "Click the map to set Area B for the comparison",
+      setAreaB,
+    );
   }
 
   function editQuestion(text: string) {
@@ -560,7 +638,12 @@ export default function ResearchPanel({
     if (!map) throw new Error("The map is not ready.");
 
     if (layer.style === "suitability") {
-      map.addClassifiedLayer(layer.geojson, layer.name, "score_band", SCORE_PALETTE);
+      map.addClassifiedLayer(
+        layer.geojson,
+        layer.name,
+        "score_band",
+        SCORE_PALETTE,
+      );
     } else if (layer.style === "coverage") {
       map.addClassifiedLayer(
         layer.geojson,
@@ -580,9 +663,13 @@ export default function ResearchPanel({
   function addResultLayer(turnId: number, layer: AgentLayer, key: string) {
     try {
       addAgentLayer(layer);
-      updateTurn(turnId, (current) => ({ addedResultLayers: [...current.addedResultLayers, key] }));
+      updateTurn(turnId, (current) => ({
+        addedResultLayers: [...current.addedResultLayers, key],
+      }));
     } catch (error) {
-      updateTurn(turnId, () => ({ error: error instanceof Error ? error.message : "Unable to add layer." }));
+      updateTurn(turnId, () => ({
+        error: error instanceof Error ? error.message : "Unable to add layer.",
+      }));
     }
   }
 
@@ -645,8 +732,13 @@ export default function ResearchPanel({
           </div>
 
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold tracking-tight">Research Agent</h2>
-            <p className={`mt-0.5 truncate text-[11px] ${muted}`} title={status?.error ?? undefined}>
+            <h2 className="text-sm font-semibold tracking-tight">
+              Research Agent
+            </h2>
+            <p
+              className={`mt-0.5 truncate text-[11px] ${muted}`}
+              title={status?.error ?? undefined}
+            >
               {providerLabel}
             </p>
           </div>
@@ -655,10 +747,16 @@ export default function ResearchPanel({
         <div className="flex items-center gap-1.5">
           <button
             type="button"
-            onClick={() => showView(view === "workspace" ? "conversation" : "workspace")}
+            onClick={() =>
+              showView(view === "workspace" ? "conversation" : "workspace")
+            }
             aria-label="Research workspace"
             aria-pressed={view === "workspace"}
-            title={view === "workspace" ? "Back to the conversation" : "Research workspace and history"}
+            title={
+              view === "workspace"
+                ? "Back to the conversation"
+                : "Research workspace and history"
+            }
             className={`rounded-lg border p-2 transition-colors ${
               view === "workspace"
                 ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-500"
@@ -686,7 +784,9 @@ export default function ResearchPanel({
       </header>
 
       {/* Analysis location */}
-      <div className={`shrink-0 border-b px-4 py-3 ${isDark ? "border-white/10" : "border-gray-200"}`}>
+      <div
+        className={`shrink-0 border-b px-4 py-3 ${isDark ? "border-white/10" : "border-gray-200"}`}
+      >
         <PickField
           isDark={isDark}
           label="Analysis location"
@@ -703,14 +803,7 @@ export default function ResearchPanel({
         />
         <button
           type="button"
-          onClick={() => {
-            picker.cancel("agent");
-            const centre = mapRef.current?.getViewCenter();
-            if (centre) {
-              setLocation(centre);
-              picker.setMarker("agent", "location", centre);
-            }
-          }}
+          onClick={() => void takeMapCentre()}
           className="mt-1.5 text-[11px] font-medium text-emerald-500 hover:underline"
         >
           Use current map centre
@@ -719,9 +812,14 @@ export default function ResearchPanel({
           <summary
             className={`flex cursor-pointer list-none items-center gap-1.5 text-[11px] font-medium [&::-webkit-details-marker]:hidden ${muted}`}
           >
-            <ChevronRight size={12} className="transition-transform group-open:rotate-90" />
+            <ChevronRight
+              size={12}
+              className="transition-transform group-open:rotate-90"
+            />
             Compare with a second area
-            {areaB && <span className="ml-auto text-violet-400">Area B set</span>}
+            {areaB && (
+              <span className="ml-auto text-violet-400">Area B set</span>
+            )}
           </summary>
           <div className="mt-2">
             <p className={`mb-1.5 text-[10px] ${muted}`}>
@@ -777,7 +875,9 @@ export default function ResearchPanel({
       {/* Conversation */}
       <div
         ref={scrollRef}
-        className={`min-h-0 flex-1 space-y-4 overflow-y-auto p-4 ${view === "workspace" ? "hidden" : ""}`}
+        className={`min-h-0 flex-1 space-y-4 overflow-y-auto p-4 ${
+          view === "workspace" ? "hidden" : ""
+        } ${isDark ? "scrollbar-thin-dark" : "scrollbar-thin-light"}`}
         aria-live="polite"
       >
         {turns.length === 0 && (
@@ -786,15 +886,16 @@ export default function ResearchPanel({
               Ask a geographic question
             </h3>
             <p className={`mt-1 text-xs leading-5 ${muted}`}>
-              Answers come only from real OpenStreetMap data and GeoMind's spatial
-              tools. Every tool call is listed with its result.
+              Answers come only from real OpenStreetMap data and GeoMind's
+              spatial tools. Every tool call is listed with its result.
             </p>
             <div className="mt-3 flex flex-col gap-2">
               {EXAMPLES.map((example) => (
                 <button
                   key={example}
                   type="button"
-                  onClick={() => void ask(example)}
+                  // Examples need a location: fall back to the current map centre.
+                  onClick={() => void ask(example, undefined, location ?? takeMapCentre())}
                   disabled={busy}
                   className={`gm-press gm-lift flex items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs transition-colors disabled:opacity-50 ${card} hover:border-emerald-500/40`}
                 >
@@ -810,13 +911,17 @@ export default function ResearchPanel({
           <article key={turn.id} className="gm-fade-up space-y-2">
             <p
               className={`ml-8 rounded-2xl rounded-br-md px-3 py-2 text-xs leading-5 ${
-                isDark ? "bg-emerald-500/15 text-emerald-50" : "bg-emerald-50 text-emerald-950"
+                isDark
+                  ? "bg-emerald-500/15 text-emerald-50"
+                  : "bg-emerald-50 text-emerald-950"
               }`}
             >
               {turn.question}
             </p>
 
-            <div className={`mr-4 rounded-2xl rounded-bl-md border p-3 ${card}`}>
+            <div
+              className={`mr-4 rounded-2xl rounded-bl-md border p-3 ${card}`}
+            >
               <TurnStatusLine
                 key={`${turn.status}:${turn.status === "running" ? turn.runningTool : ""}:${turn.execution?.status ?? ""}`}
                 turn={turn}
@@ -836,13 +941,25 @@ export default function ResearchPanel({
               )}
 
               {turn.response?.needs_input.includes("coordinates") && (
-                <p className="mt-2 text-[11px] text-amber-500">
-                  Use “Analysis location” above, then ask again.
-                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-amber-500">
+                  <span>Use “Analysis location” above, or:</span>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      const centre = takeMapCentre();
+                      if (centre) void ask(turn.question, undefined, centre);
+                    }}
+                    className="gm-press rounded-md border border-amber-500/40 px-2 py-1 font-medium hover:bg-amber-500/10 disabled:opacity-40"
+                  >
+                    Use map centre and ask again
+                  </button>
+                </div>
               )}
               {turn.response?.needs_input.includes("facility") && (
                 <p className="mt-2 text-[11px] text-amber-500">
-                  Or open “Site suitability settings” above and choose a facility.
+                  Or open “Site suitability settings” above and choose a
+                  facility.
                 </p>
               )}
               {turn.response?.needs_input.includes("compare_coordinates") && (
@@ -860,7 +977,10 @@ export default function ResearchPanel({
                   onPickCompare={pickAreaB}
                   onEditQuestion={editQuestion}
                   onReplan={(text) => void planQuestion(text, turn.sessionId)}
-                  onExecute={() => turn.researchPlan && void executePlan(turn.id, turn.researchPlan, turn.sessionId)}
+                  onExecute={() =>
+                    turn.researchPlan &&
+                    void executePlan(turn.id, turn.researchPlan, turn.sessionId)
+                  }
                   execution={turn.execution}
                 />
               )}
@@ -872,7 +992,9 @@ export default function ResearchPanel({
                   totalSteps={turn.researchPlan.steps.length}
                   currentTitle={turn.runningTool}
                   addedLayers={turn.addedResultLayers}
-                  onAddLayer={(layer, key) => addResultLayer(turn.id, layer, key)}
+                  onAddLayer={(layer, key) =>
+                    addResultLayer(turn.id, layer, key)
+                  }
                   onCancel={cancelActive}
                 />
               )}
@@ -884,33 +1006,55 @@ export default function ResearchPanel({
                     <button
                       type="button"
                       disabled={turn.insights?.loading}
-                      onClick={() => void generateInsights(turn.id, turn.execution!.id!)}
+                      onClick={() =>
+                        void generateInsights(turn.id, turn.execution!.id!)
+                      }
                       className={`flex min-h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition disabled:opacity-50 ${
                         isDark
                           ? "border-emerald-400/30 text-emerald-400 hover:bg-emerald-400/10"
                           : "border-emerald-500/40 text-emerald-700 hover:bg-emerald-50"
                       }`}
                     >
-                      {turn.insights?.loading ? <LoaderCircle size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                      {turn.insights?.loading ? "Analysing evidence…" : "Generate Research Insights"}
+                      {turn.insights?.loading ? (
+                        <LoaderCircle size={13} className="animate-spin" />
+                      ) : (
+                        <Sparkles size={13} />
+                      )}
+                      {turn.insights?.loading
+                        ? "Analysing evidence…"
+                        : "Generate Research Insights"}
                     </button>
-                    <span className={`text-[10px] ${muted}`}>Uses these results only; nothing is re-run.</span>
+                    <span className={`text-[10px] ${muted}`}>
+                      Uses these results only; nothing is re-run.
+                    </span>
                     {turn.insights?.error && (
                       <p className="flex w-full gap-1.5 text-[11px] text-red-400">
-                        <AlertCircle size={13} className="mt-px shrink-0" /> {turn.insights.error}
+                        <AlertCircle size={13} className="mt-px shrink-0" />{" "}
+                        {turn.insights.error}
                       </p>
                     )}
                   </div>
                 )}
 
-              {turn.insights?.data && <ResearchInsightsView isDark={isDark} synthesis={turn.insights.data} />}
+              {turn.insights?.data && (
+                <ResearchInsightsView
+                  isDark={isDark}
+                  synthesis={turn.insights.data}
+                />
+              )}
 
               {turn.insights?.data && turn.execution?.id && (
                 <ResearchReportControls
                   isDark={isDark}
                   executionId={turn.execution.id}
-                  available={!["failed", "insufficient_evidence"].includes(turn.insights.data.overall_status)}
-                  onGenerated={() => setSessionsVersion((version) => version + 1)}
+                  available={
+                    !["failed", "insufficient_evidence"].includes(
+                      turn.insights.data.overall_status,
+                    )
+                  }
+                  onGenerated={() =>
+                    setSessionsVersion((version) => version + 1)
+                  }
                 />
               )}
 
@@ -924,11 +1068,17 @@ export default function ResearchPanel({
               )}
 
               {!turn.plan && turn.steps.length > 0 && (
-                <details className="group mt-3" open={turn.status !== "completed"}>
+                <details
+                  className="group mt-3"
+                  open={turn.status !== "completed"}
+                >
                   <summary
                     className={`flex cursor-pointer list-none items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] [&::-webkit-details-marker]:hidden ${muted}`}
                   >
-                    <ChevronRight size={12} className="transition-transform group-open:rotate-90" />
+                    <ChevronRight
+                      size={12}
+                      className="transition-transform group-open:rotate-90"
+                    />
                     Tool steps ({turn.steps.length})
                   </summary>
                   <ol className="mt-2 space-y-1.5">
@@ -940,14 +1090,22 @@ export default function ResearchPanel({
                         }`}
                       >
                         {step.status === "completed" ? (
-                          <CheckCircle2 size={13} className="mt-px shrink-0 text-emerald-500" />
+                          <CheckCircle2
+                            size={13}
+                            className="mt-px shrink-0 text-emerald-500"
+                          />
                         ) : (
-                          <AlertCircle size={13} className="mt-px shrink-0 text-red-400" />
+                          <AlertCircle
+                            size={13}
+                            className="mt-px shrink-0 text-red-400"
+                          />
                         )}
                         <div className="min-w-0">
                           <p className="font-mono font-medium">{step.tool}</p>
                           <p className={muted}>{step.summary}</p>
-                          {step.error && <p className="text-red-400">{step.error}</p>}
+                          {step.error && (
+                            <p className="text-red-400">{step.error}</p>
+                          )}
                         </div>
                       </li>
                     ))}
@@ -975,16 +1133,21 @@ export default function ResearchPanel({
                     <span className="min-w-0 flex-1 truncate">
                       {added ? "Added" : "Add to map"}: {layer.name}
                     </span>
-                    <span className={`shrink-0 text-[10px] ${muted}`}>{layer.feature_count}</span>
+                    <span className={`shrink-0 text-[10px] ${muted}`}>
+                      {layer.feature_count}
+                    </span>
                   </button>
                 );
               })}
 
-              {turn.response?.intent === "route" && turn.response.parameters?.result && (
-                <p className={`mt-2 flex items-center gap-1.5 text-[11px] ${muted}`}>
-                  <Route size={12} /> Route drawn on the map.
-                </p>
-              )}
+              {turn.response?.intent === "route" &&
+                turn.response.parameters?.result && (
+                  <p
+                    className={`mt-2 flex items-center gap-1.5 text-[11px] ${muted}`}
+                  >
+                    <Route size={12} /> Route drawn on the map.
+                  </p>
+                )}
 
               {turn.response?.intent === "nearest_features" &&
                 turn.response.parameters?.result?.results?.map(
@@ -1000,7 +1163,9 @@ export default function ResearchPanel({
                       key={`${item.feature_index}-${index}`}
                       type="button"
                       onClick={() => {
-                        const origin = turn.response?.parameters?.result?.origin?.coordinates;
+                        const origin =
+                          turn.response?.parameters?.result?.origin
+                            ?.coordinates;
                         if (Array.isArray(origin) && item.feature?.geometry) {
                           onNearestFeatureSelect?.(
                             [Number(origin[0]), Number(origin[1])],
@@ -1018,7 +1183,9 @@ export default function ResearchPanel({
                             `Feature ${item.feature_index + 1}`,
                         )}
                       </span>
-                      <span className={muted}>{(item.distance_metres / 1000).toFixed(2)} km</span>
+                      <span className={muted}>
+                        {(item.distance_metres / 1000).toFixed(2)} km
+                      </span>
                     </button>
                   ),
                 )}
@@ -1050,17 +1217,23 @@ export default function ResearchPanel({
             rows={2}
             maxLength={2000}
             className={`w-full resize-none bg-transparent px-3 py-2.5 text-xs leading-5 outline-none ${
-              isDark ? "text-white placeholder:text-neutral-500" : "text-gray-900 placeholder:text-gray-400"
+              isDark
+                ? "text-white placeholder:text-neutral-500"
+                : "text-gray-900 placeholder:text-gray-400"
             }`}
           />
           <div className="flex items-center justify-between px-2.5 pb-2">
-            <span className={`text-[10px] tabular-nums ${muted}`}>{question.length}/2000</span>
+            <span className={`text-[10px] tabular-nums ${muted}`}>
+              {question.length}/2000
+            </span>
             {busy ? (
               <button
                 type="button"
                 onClick={cancelActive}
                 className={`gm-press gm-fade-in min-h-8 rounded-lg border px-3 text-xs font-medium ${
-                  isDark ? "border-white/10 hover:text-red-300" : "border-gray-200 hover:text-red-600"
+                  isDark
+                    ? "border-white/10 hover:text-red-300"
+                    : "border-gray-200 hover:text-red-600"
                 }`}
               >
                 Cancel
@@ -1101,7 +1274,10 @@ function patchStep(
   stepId: string,
   change: Partial<WorkflowStep>,
 ): WorkflowStep[] | null {
-  return plan?.map((step) => (step.id === stepId ? { ...step, ...change } : step)) ?? null;
+  return (
+    plan?.map((step) => (step.id === stepId ? { ...step, ...change } : step)) ??
+    null
+  );
 }
 
 function TurnStatusLine({ turn }: { turn: Turn }) {
@@ -1123,7 +1299,10 @@ function TurnStatusLine({ turn }: { turn: Turn }) {
       return (
         <p className={`${base} text-sky-500`} role="status">
           <Wrench size={13} className="animate-pulse" /> Running:{" "}
-          <span className={turn.plan ? "" : "font-mono"}>{turn.runningTool}</span>…
+          <span className={turn.plan ? "" : "font-mono"}>
+            {turn.runningTool}
+          </span>
+          …
         </p>
       );
     case "completed": {
@@ -1132,8 +1311,16 @@ function TurnStatusLine({ turn }: { turn: Turn }) {
         const cancelled = turn.execution.status === "cancelled";
         const clean = turn.execution.status === "completed";
         return (
-          <p className={`${base} ${failed ? "gm-nudge text-red-400" : cancelled ? "text-neutral-500" : clean ? "text-emerald-500" : "text-amber-500"}`}>
-            {failed ? <AlertCircle size={13} /> : cancelled ? <CircleSlash size={13} /> : <CheckCircle2 size={13} className="gm-pop" />}
+          <p
+            className={`${base} ${failed ? "gm-nudge text-red-400" : cancelled ? "text-neutral-500" : clean ? "text-emerald-500" : "text-amber-500"}`}
+          >
+            {failed ? (
+              <AlertCircle size={13} />
+            ) : cancelled ? (
+              <CircleSlash size={13} />
+            ) : (
+              <CheckCircle2 size={13} className="gm-pop" />
+            )}
             {failed
               ? "Research execution failed"
               : cancelled
@@ -1161,7 +1348,9 @@ function TurnStatusLine({ turn }: { turn: Turn }) {
         );
       }
 
-      const failedSteps = turn.steps.filter((step) => step.status === "failed").length;
+      const failedSteps = turn.steps.filter(
+        (step) => step.status === "failed",
+      ).length;
 
       // Never present a run with failed tool steps as a clean success.
       if (failedSteps > 0) {
@@ -1201,10 +1390,25 @@ function TurnStatusLine({ turn }: { turn: Turn }) {
   }
 }
 
-function applyExecutionEvent(state: ExecutionUIState, event: ExecutionEvent): ExecutionUIState {
-  const next: ExecutionUIState = { ...state, id: event.execution_id, steps: { ...state.steps } };
-  const patch = (stepId: string, change: Partial<ExecutionUIState["steps"][string]>) => {
-    const current = next.steps[stepId] ?? { status: "pending", summary: "", error: null, reused_from: null };
+function applyExecutionEvent(
+  state: ExecutionUIState,
+  event: ExecutionEvent,
+): ExecutionUIState {
+  const next: ExecutionUIState = {
+    ...state,
+    id: event.execution_id,
+    steps: { ...state.steps },
+  };
+  const patch = (
+    stepId: string,
+    change: Partial<ExecutionUIState["steps"][string]>,
+  ) => {
+    const current = next.steps[stepId] ?? {
+      status: "pending",
+      summary: "",
+      error: null,
+      reused_from: null,
+    };
     next.steps[stepId] = { ...current, ...change };
   };
 
@@ -1231,7 +1435,10 @@ function applyExecutionEvent(state: ExecutionUIState, event: ExecutionEvent): Ex
       break;
     case "step_blocked":
     case "step_skipped":
-      patch(event.step_id, { status: event.type === "step_blocked" ? "blocked" : "skipped", error: event.reason });
+      patch(event.step_id, {
+        status: event.type === "step_blocked" ? "blocked" : "skipped",
+        error: event.reason,
+      });
       break;
     default:
       next.status = event.status;
