@@ -17,7 +17,15 @@ export default function WorkspaceStatus({
       }`}
     >
       <span className="mr-2 inline-block h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.45)]" />
-      2D MAP · OPENSTREETMAP
+      2D MAP ·{' '}
+      <a
+        href="https://www.openstreetmap.org/copyright"
+        target="_blank"
+        rel="noreferrer"
+        className="pointer-events-auto hover:text-emerald-500 hover:underline"
+      >
+        © OPENSTREETMAP CONTRIBUTORS
+      </a>
     </div>
   );
 }

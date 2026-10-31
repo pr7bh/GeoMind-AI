@@ -11,6 +11,7 @@ import { easeOut, inAndOut } from "ol/easing";
 import View from "ol/View";
 import TileLayer from "ol/layer/Tile";
 import XYZ from "ol/source/XYZ";
+import OSM from "ol/source/OSM";
 import "ol/ol.css";
 import { fromLonLat, toLonLat, transform } from "ol/proj";
 import Feature from "ol/Feature";
@@ -1593,19 +1594,23 @@ clearDiscoveryLayers() {
 
     const cartoKey = import.meta.env.VITE_CARTO_API_KEY;
 
-    const lightLayer = new TileLayer({
-      source: new XYZ({
-        url: `https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png?key=${cartoKey}`,
+    // CARTO basemaps need an API key. Without one, fall back to keyless
+    // OpenStreetMap tiles; the dark variant is darkened with a CSS filter
+    // (.geomind-dark-tiles in index.css) on its own canvas.
+    const cartoSource = (style: "light_all" | "dark_all") =>
+      new XYZ({
+        url: `https://a.basemaps.cartocdn.com/${style}/{z}/{x}/{y}.png?key=${cartoKey}`,
         attributions: "&copy; OpenStreetMap contributors &copy; CARTO",
-      }),
+      });
+
+    const lightLayer = new TileLayer({
+      source: cartoKey ? cartoSource("light_all") : new OSM(),
       visible: theme === "light",
     });
 
     const darkLayer = new TileLayer({
-      source: new XYZ({
-        url: `https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png?key=${cartoKey}`,
-        attributions: "&copy; OpenStreetMap contributors &copy; CARTO",
-      }),
+      source: cartoKey ? cartoSource("dark_all") : new OSM(),
+      className: cartoKey ? "ol-layer" : "ol-layer geomind-dark-tiles",
       visible: theme === "dark",
     });
 

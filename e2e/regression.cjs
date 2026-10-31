@@ -54,7 +54,7 @@ const setMode = (base, mode) => fetch(`${base}/mode/${mode}`);
     (url) => !["localhost", "127.0.0.1"].includes(url.hostname),
     (route) => {
       const url = route.request().url();
-      if (url.includes("basemaps.cartocdn.com")) {
+      if (url.includes("basemaps.cartocdn.com") || url.includes("tile.openstreetmap.org")) {
         tiles.push(url);
         return route.fulfill({ status: 200, contentType: "image/png", body: TILE });
       }

@@ -41,7 +41,8 @@ python3 "$ROOT/e2e/fake_llm.py" "$LLM_PORT" >"$LOGS/llm.log" 2>&1 & PIDS+=($!)
 
 (
   cd "$ROOT/frontend"
-  VITE_API_BASE_URL="http://127.0.0.1:$API_PORT" exec npx vite --port "$WEB_PORT" --strictPort
+  # A placeholder key selects the CARTO basemaps (tiles are intercepted in the browser).
+  VITE_CARTO_API_KEY=e2e-placeholder VITE_API_BASE_URL="http://127.0.0.1:$API_PORT" exec npx vite --port "$WEB_PORT" --strictPort
 ) >"$LOGS/vite.log" 2>&1 & PIDS+=($!)
 
 for _ in $(seq 1 60); do
