@@ -30,6 +30,8 @@ import { getArea, getLength, getDistance } from "ol/sphere";
 import GeoJSON from "ol/format/GeoJSON";
 import { isEmpty } from "ol/extent";
 import HeatmapLayer from "ol/layer/Heatmap";
+import type BaseLayer from "ol/layer/Base";
+import { prefersReducedMotion } from "../../lib/reducedMotion";
 import type SimpleGeometry from "ol/geom/SimpleGeometry";
 
 export interface SelectedFeatureInfo {
@@ -246,6 +248,29 @@ function discoveryStyle(color: string) {
 const INITIAL_CENTER: [number, number] = [0, 0];
 const INITIAL_ZOOM = 2;
 const USER_LOCATION_ZOOM = 14;
+const LAYER_FADE_MS = 280;
+// Fading re-renders a layer every frame, so only modest layers fade in.
+const MAX_FADE_FEATURES = 5000;
+const layerFades = new WeakMap<BaseLayer, number>();
+
+/** Fade a layer's opacity in (cheap: no source or style changes). */
+function fadeInLayer(layer: BaseLayer) {
+  const pending = layerFades.get(layer);
+  if (pending) cancelAnimationFrame(pending);
+  if (prefersReducedMotion()) {
+    layer.setOpacity(1);
+    return;
+  }
+  layer.setOpacity(0);
+  const start = performance.now();
+  const tick = (now: number) => {
+    const t = Math.min((now - start) / LAYER_FADE_MS, 1);
+    layer.setOpacity(1 - Math.pow(1 - t, 3));
+    if (t < 1) layerFades.set(layer, requestAnimationFrame(tick));
+    else layerFades.delete(layer);
+  };
+  layerFades.set(layer, requestAnimationFrame(tick));
+}
 const FLY_DURATION_MS = 2200;
 
 type LocationStatus = "locating" | "found" | "denied" | "unavailable";
@@ -404,6 +429,7 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
 
     map.addLayer(layer);
     importedLayersRef.current.push(record);
+    if (features.length <= MAX_FADE_FEATURES) fadeInLayer(layer);
 
     const extent = source.getExtent();
 
@@ -649,7 +675,10 @@ const GeoMap = forwardRef<GeoMapHandle, GeoMapProps>(function GeoMap(
 
     setImportedLayerVisibility(id, visible) {
       const record = importedLayersRef.current.find((item) => item.id === id);
-      record?.layer.setVisible(visible);
+      if (!record) return;
+      record.layer.setVisible(visible);
+      // Showing fades in; hiding stays immediate so visibility state is exact.
+      if (visible && record.count <= MAX_FADE_FEATURES) fadeInLayer(record.layer);
     },
 
     removeImportedLayer(id) {
@@ -1921,7 +1950,7 @@ clearDiscoveryLayers() {
       <div
         role="status"
         aria-live="polite"
-        className={`pointer-events-none absolute bottom-24 left-1/2 z-10 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-2 rounded-full border px-3.5 py-2 text-xs font-medium shadow-lg backdrop-blur-xl transition-all duration-500 ease-out ${
+        className={`pointer-events-none absolute bottom-24 left-1/2 z-10 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-2 rounded-full border px-3.5 py-2 text-xs gm-glass font-medium shadow-lg transition-all duration-500 ease-out ${
           locationStatusVisible ? "translate-y-0 opacity-100" : "translate-y-3 opacity-0"
         } ${
           isDark

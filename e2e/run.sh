@@ -52,5 +52,5 @@ for _ in $(seq 1 60); do
   sleep 0.5
 done
 
-E2E_WEB="http://localhost:$WEB_PORT" E2E_OVERPASS="http://127.0.0.1:$OVERPASS_PORT" E2E_LLM="http://127.0.0.1:$LLM_PORT" \
+E2E_WEB="http://localhost:$WEB_PORT" E2E_API="http://127.0.0.1:$API_PORT" E2E_OVERPASS="http://127.0.0.1:$OVERPASS_PORT" E2E_LLM="http://127.0.0.1:$LLM_PORT" \
   node "$ROOT/e2e/regression.cjs" || { status=$?; echo "Logs: $LOGS" >&2; exit "$status"; }

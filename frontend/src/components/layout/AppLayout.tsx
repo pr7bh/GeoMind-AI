@@ -333,7 +333,7 @@ export default function AppLayout() {
               {importedLayers.map((layer) => (
                 <div
                   key={layer.id}
-                  className={`rounded-xl border p-3 backdrop-blur-xl transition-all duration-200 ${
+                  className={`gm-glass-card rounded-xl border p-3 transition-all duration-200 ${
                     isDark
                       ? "border-white/[0.09] bg-white/[0.035] hover:bg-white/[0.06]"
                       : "border-white/85 bg-white/50 hover:bg-white/75"

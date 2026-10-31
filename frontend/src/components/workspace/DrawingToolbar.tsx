@@ -31,11 +31,11 @@ export default function DrawingToolbar({
   const isDark = theme === "dark";
 
   const buttonClass = (active: boolean) =>
-    `rounded-lg border border-transparent p-2 transition-all duration-200 ${
+    `gm-press gm-icon-hover rounded-lg border border-transparent p-2 transition-all duration-200 ${
       active
         ? isDark
-          ? "border-emerald-400/15 bg-emerald-400/[0.12] text-emerald-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
-          : "border-emerald-200/50 bg-emerald-50/70 text-emerald-700"
+          ? "gm-tool-active border-emerald-400/15 bg-emerald-400/[0.12] text-emerald-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
+          : "gm-tool-active border-emerald-200/50 bg-emerald-50/70 text-emerald-700"
         : isDark
           ? "text-neutral-300 hover:border-white/[0.05] hover:bg-white/[0.07] hover:text-emerald-400"
           : "text-gray-600 hover:border-emerald-100/60 hover:bg-emerald-50/60 hover:text-emerald-700"
@@ -43,7 +43,7 @@ export default function DrawingToolbar({
 
   return (
     <div
-      className={`absolute right-4 top-32 z-10 flex flex-col gap-1 rounded-xl border backdrop-blur-2xl transition-all duration-300 ${
+      className={`absolute right-4 top-32 z-10 flex flex-col gap-1 gm-glass rounded-xl border transition-all duration-300 ${
         isDark
           ? "border-white/12 bg-neutral-950/55 shadow-[0_12px_35px_rgba(0,0,0,0.25),inset_0_1px_0_rgba(255,255,255,0.04)]"
           : "border-white/80 bg-white/55 shadow-[0_12px_35px_rgba(15,23,42,0.08),inset_0_1px_0_rgba(255,255,255,0.65)]"

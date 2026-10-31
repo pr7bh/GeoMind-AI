@@ -64,3 +64,147 @@ body {
 .scrollbar-thin-light::-webkit-scrollbar-thumb:hover {
   background: #34d399;
 }
+/* ------------------------------------------------------------------
+   Glass system: one consistent frosted-glass treatment for every surface.
+   Only background and backdrop-filter are set here, so each component's
+   existing borders, shadows, hover and focus colours keep working.
+   Light values first; .dark (on <html>) switches to the jet-black tint.
+   ------------------------------------------------------------------ */
+.gm-glass,
+.gm-glass-strong {
+  -webkit-backdrop-filter: blur(22px) saturate(170%);
+  backdrop-filter: blur(22px) saturate(170%);
+}
+.gm-glass {
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.72), rgb(255 255 255 / 0.54));
+}
+.gm-glass-strong {
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.86), rgb(255 255 255 / 0.74));
+}
+.dark .gm-glass {
+  background: linear-gradient(180deg, rgb(28 28 30 / 0.58), rgb(8 8 8 / 0.46));
+}
+.dark .gm-glass-strong {
+  background: linear-gradient(180deg, rgb(22 22 24 / 0.80), rgb(6 6 6 / 0.72));
+}
+/* Cards and fields sit inside a glass surface: no second blur (cheaper). */
+.gm-glass-card {
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.62), rgb(255 255 255 / 0.40));
+}
+.dark .gm-glass-card {
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.055), rgb(255 255 255 / 0.018));
+}
+.gm-glass-field {
+  background: rgb(255 255 255 / 0.62);
+}
+.dark .gm-glass-field {
+  background: rgb(0 0 0 / 0.32);
+}
+
+/* ------------------------------------------------------------------
+   Motion system: timing tokens, keyframes and small utilities.
+   Transform/opacity only; no layout changes. Colours come from the
+   existing emerald accent or currentColor, so both themes work.
+   ------------------------------------------------------------------ */
+:root {
+  --gm-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --gm-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --gm-micro: 150ms;      /* micro-interactions */
+  --gm-component: 220ms;  /* component transitions */
+  --gm-panel: 300ms;      /* panels */
+  --gm-enter: 420ms;      /* larger entrances */
+  --gm-stagger: 40ms;
+  --gm-glow: rgb(16 185 129 / 0.22);
+}
+
+@keyframes gm-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes gm-fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes gm-fade-down { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes gm-scale-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes gm-slide-in { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
+@keyframes gm-pop { 0% { transform: scale(0.85); } 60% { transform: scale(1.12); } 100% { transform: scale(1); } }
+@keyframes gm-nudge { 0%, 100% { transform: none; } 25% { transform: translateX(-2px); } 75% { transform: translateX(2px); } }
+@keyframes gm-soft-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@keyframes gm-dot { 0%, 80%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
+@keyframes gm-shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+/* Scale only: Tailwind positions the indicator with the separate `translate` property. */
+@keyframes gm-indicator { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+
+.gm-fade-in { animation: gm-fade-in var(--gm-component) var(--gm-ease-out) both; }
+.gm-fade-up { animation: gm-fade-up var(--gm-component) var(--gm-ease-out) both; }
+.gm-fade-down { animation: gm-fade-down var(--gm-component) var(--gm-ease-out) both; }
+.gm-scale-in { animation: gm-scale-in var(--gm-component) var(--gm-ease-out) both; }
+.gm-slide-in { animation: gm-slide-in var(--gm-panel) var(--gm-ease-out) both; }
+.gm-enter { animation: gm-fade-up var(--gm-enter) var(--gm-ease-out) both; }
+.gm-pop { animation: gm-pop var(--gm-component) var(--gm-ease-out) both; }
+.gm-nudge { animation: gm-nudge 260ms var(--gm-ease-in-out) 1; }
+.gm-soft-pulse { animation: gm-soft-pulse 1.6s var(--gm-ease-in-out) infinite; }
+.gm-indicator-in { animation: gm-indicator var(--gm-component) var(--gm-ease-out) both; }
+
+/* Staggered children (first 12 step in; later ones share the last delay). */
+.gm-stagger > * { animation: gm-fade-up var(--gm-component) var(--gm-ease-out) both; }
+.gm-stagger > :nth-child(2) { animation-delay: calc(var(--gm-stagger) * 1); }
+.gm-stagger > :nth-child(3) { animation-delay: calc(var(--gm-stagger) * 2); }
+.gm-stagger > :nth-child(4) { animation-delay: calc(var(--gm-stagger) * 3); }
+.gm-stagger > :nth-child(5) { animation-delay: calc(var(--gm-stagger) * 4); }
+.gm-stagger > :nth-child(6) { animation-delay: calc(var(--gm-stagger) * 5); }
+.gm-stagger > :nth-child(7) { animation-delay: calc(var(--gm-stagger) * 6); }
+.gm-stagger > :nth-child(8) { animation-delay: calc(var(--gm-stagger) * 7); }
+.gm-stagger > :nth-child(9) { animation-delay: calc(var(--gm-stagger) * 8); }
+.gm-stagger > :nth-child(10) { animation-delay: calc(var(--gm-stagger) * 9); }
+.gm-stagger > :nth-child(11) { animation-delay: calc(var(--gm-stagger) * 10); }
+.gm-stagger > :nth-child(n + 12) { animation-delay: calc(var(--gm-stagger) * 11); }
+
+/* Press, hover lift and icon feedback for existing controls. */
+.gm-press {
+  transition-property: color, background-color, border-color, box-shadow, transform, opacity;
+  transition-duration: var(--gm-micro);
+  transition-timing-function: var(--gm-ease-out);
+}
+.gm-press:active:not(:disabled) { transform: scale(0.97); }
+.gm-icon-hover svg { transition: transform var(--gm-micro) var(--gm-ease-out); }
+.gm-icon-hover:hover:not(:disabled) svg { transform: scale(1.08); }
+.gm-tool-active svg { animation: gm-pop var(--gm-component) var(--gm-ease-out) both; }
+.gm-lift {
+  transition: transform var(--gm-micro) var(--gm-ease-out), box-shadow var(--gm-component) var(--gm-ease-out);
+}
+.gm-lift:hover { transform: translateY(-1px); box-shadow: 0 8px 20px -14px var(--gm-glow); }
+
+/* Gentle emerald glow on existing focus states. */
+.gm-focus-glow { transition: box-shadow var(--gm-component) var(--gm-ease-out), border-color var(--gm-component) var(--gm-ease-out); }
+.gm-focus-glow:focus-within, .gm-focus-glow:focus-visible { box-shadow: 0 0 0 3px var(--gm-glow); }
+
+/* Three-dot "thinking" indicator (sized like the 13px icons it replaces). */
+.gm-dots { display: inline-flex; width: 13px; height: 13px; align-items: center; justify-content: space-between; }
+.gm-dots > span { width: 3px; height: 3px; border-radius: 9999px; background: currentColor; animation: gm-dot 1.1s var(--gm-ease-in-out) infinite; }
+.gm-dots > span:nth-child(2) { animation-delay: 0.15s; }
+.gm-dots > span:nth-child(3) { animation-delay: 0.3s; }
+
+/* Loading shimmer: skeleton bars and a sweep over busy buttons. */
+.gm-skeleton { position: relative; overflow: hidden; border-radius: 0.5rem; background: color-mix(in srgb, currentColor 8%, transparent); }
+.gm-skeleton::after,
+.gm-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, currentColor 10%, transparent), transparent);
+  animation: gm-shimmer 1.3s var(--gm-ease-in-out) infinite;
+  pointer-events: none;
+}
+.gm-shimmer { position: relative; overflow: hidden; }
+
+/* Smoothly reveal <details> content when opened. */
+.gm-details[open] > :not(summary) { animation: gm-fade-down var(--gm-component) var(--gm-ease-out) both; }
+
+/* Respect reduced motion everywhere (including existing spinners). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

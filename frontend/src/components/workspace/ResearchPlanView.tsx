@@ -81,7 +81,7 @@ export default function ResearchPlanView({
   const areas = plan.selected_areas.filter((area) => area.required || area.coordinates);
 
   return (
-    <section aria-label="Research plan" className="mt-3 space-y-3">
+    <section aria-label="Research plan" className="gm-fade-up mt-3 space-y-3">
       <div className="flex flex-wrap items-center gap-1.5">
         <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${status.className}`}>
           {status.label}
@@ -139,7 +139,7 @@ export default function ResearchPlanView({
                 <button
                   type="button"
                   onClick={input.action === "pick_location" ? onPickLocation : onPickCompare}
-                  className="flex shrink-0 items-center gap-1 rounded-md border border-amber-500/40 px-2 py-1 text-[10px] font-medium text-amber-500 hover:bg-amber-500/10"
+                  className="gm-press flex shrink-0 items-center gap-1 rounded-md border border-amber-500/40 px-2 py-1 text-[10px] font-medium text-amber-500 hover:bg-amber-500/10"
                 >
                   <MapPin size={11} /> {input.action === "pick_location" ? "Pick Area A" : "Pick Area B"}
                 </button>
@@ -147,7 +147,7 @@ export default function ResearchPlanView({
                 <button
                   type="button"
                   onClick={() => onEditQuestion(plan.original_question)}
-                  className="flex shrink-0 items-center gap-1 rounded-md border border-amber-500/40 px-2 py-1 text-[10px] font-medium text-amber-500 hover:bg-amber-500/10"
+                  className="gm-press flex shrink-0 items-center gap-1 rounded-md border border-amber-500/40 px-2 py-1 text-[10px] font-medium text-amber-500 hover:bg-amber-500/10"
                 >
                   <PencilLine size={11} /> Edit question
                 </button>
@@ -173,7 +173,7 @@ export default function ResearchPlanView({
       )}
 
       {plan.steps.length > 0 && (
-        <ol aria-label="Planned steps" className="relative space-y-1.5">
+        <ol aria-label="Planned steps" className="gm-stagger relative space-y-1.5">
           {plan.steps.map((step, index) => {
             const run = execution?.steps[step.id];
             const style = run ? EXECUTION_STATUS[run.status] : STEP_STATUS[step.status];
@@ -188,11 +188,18 @@ export default function ResearchPlanView({
                   <span className={`absolute left-[9px] top-5 h-[calc(100%-0.25rem)] w-px ${isDark ? "bg-white/10" : "bg-gray-200"}`} />
                 )}
                 <span
-                  className={`relative z-10 mt-0.5 flex h-[19px] w-[19px] shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold ${style.dot}`}
+                  key={run?.status ?? step.status}
+                  className={`relative z-10 mt-0.5 flex h-[19px] w-[19px] shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold transition-colors duration-300 ${style.dot} ${
+                    run?.status === "completed" || run?.status === "partial" ? "gm-pop" : ""
+                  }`}
                 >
                   {step.execution_order}
                 </span>
-                <details className={`group min-w-0 flex-1 rounded-lg border px-2.5 py-1.5 ${border}`}>
+                <details
+                  className={`gm-details gm-glass-card group min-w-0 flex-1 rounded-lg border px-2.5 py-1.5 transition-colors duration-300 ${
+                    run?.status === "running" ? "border-sky-500/40" : border
+                  }`}
+                >
                   <summary className="flex cursor-pointer list-none items-start gap-2 text-[11px] [&::-webkit-details-marker]:hidden">
                     <span className="min-w-0 flex-1">
                       <span className="font-medium">{step.title}</span>
@@ -246,7 +253,7 @@ export default function ResearchPlanView({
       )}
 
       {(plan.assumptions.length > 0 || plan.limitations.length > 0) && (
-        <details className="group">
+        <details className="gm-details group">
           <summary
             className={`flex cursor-pointer list-none items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] [&::-webkit-details-marker]:hidden ${muted}`}
           >
@@ -267,12 +274,12 @@ export default function ResearchPlanView({
       )}
 
       {plan.status === "ready" && !execution && onExecute && (
-        <div className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 ${border}`}>
+        <div className={`gm-fade-up flex items-center gap-2 rounded-lg border px-2.5 py-2 ${border}`}>
           <button
             type="button"
             disabled={busy}
             onClick={onExecute}
-            className="flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-emerald-500 px-3 text-xs font-semibold text-black transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
+            className="gm-press flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-emerald-500 px-3 text-xs font-semibold text-black transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Play size={13} /> Execute Research
           </button>
@@ -287,7 +294,7 @@ export default function ResearchPlanView({
           type="button"
           disabled={busy}
           onClick={() => onReplan(plan.original_question)}
-          className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition-colors disabled:opacity-40 ${
+          className={`gm-press flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition-colors disabled:opacity-40 ${
             isDark
               ? "border-emerald-400/25 text-emerald-400 hover:bg-emerald-400/10"
               : "border-emerald-500/30 text-emerald-700 hover:bg-emerald-50"
@@ -298,7 +305,7 @@ export default function ResearchPlanView({
         <button
           type="button"
           onClick={() => onEditQuestion(plan.original_question)}
-          className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] ${border} ${muted}`}
+          className={`gm-press flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] ${border} ${muted}`}
         >
           <PencilLine size={12} /> Revise question
         </button>

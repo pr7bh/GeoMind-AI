@@ -39,7 +39,7 @@ export default function SuitabilityConfig({ isDark, disabled, hasLocation, onRun
   const muted = isDark ? "text-neutral-400" : "text-gray-500";
   const border = isDark ? "border-white/8" : "border-gray-200";
   const input = `rounded-md border px-1.5 py-1 text-[11px] outline-none focus:border-emerald-500 ${
-    isDark ? "border-white/10 bg-black/40 text-white" : "border-gray-200 bg-white text-gray-900"
+    isDark ? "gm-glass-field border-white/10 text-white" : "gm-glass-field border-gray-200 text-gray-900"
   }`;
 
   const [config, setConfig] = useState<Config | null>(null);
@@ -114,7 +114,7 @@ export default function SuitabilityConfig({ isDark, disabled, hasLocation, onRun
         Site suitability settings
       </summary>
 
-      <div className={`mt-2 space-y-2 rounded-lg border p-2.5 text-[11px] ${border}`} aria-label="Site suitability settings">
+      <div className={`gm-glass-card mt-2 space-y-2 rounded-lg border p-2.5 text-[11px] ${border}`} aria-label="Site suitability settings">
         {loading && (
           <p className={`flex items-center gap-1.5 ${muted}`}>
             <LoaderCircle size={12} className="animate-spin" /> Loading criteria…

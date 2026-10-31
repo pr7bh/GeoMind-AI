@@ -261,7 +261,7 @@ export default function LocationSearch({
     <div className="relative w-full">
       <form
         onSubmit={handleSearch}
-        className={`group relative flex min-h-[54px] items-center gap-3 overflow-hidden rounded-2xl border px-3 backdrop-blur-2xl transition-all duration-300 ${
+        className={`group relative flex min-h-[54px] items-center gap-3 gm-glass overflow-hidden rounded-2xl border px-3 transition-all duration-300 ${
           isDark
             ? `bg-neutral-950/55 ${
                 isFocused
@@ -336,7 +336,7 @@ export default function LocationSearch({
 
       {(results.length > 0 || error || loading) && (
         <div
-          className={`absolute left-0 right-0 top-full z-[100] mt-2 overflow-hidden rounded-2xl border backdrop-blur-2xl ${glassPanel}`}
+          className={`absolute left-0 right-0 top-full z-[100] gm-glass-strong mt-2 overflow-hidden rounded-2xl border ${glassPanel}`}
         >
           <div
             className={`flex items-center justify-between border-b px-3 py-2.5 ${

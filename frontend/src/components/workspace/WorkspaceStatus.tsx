@@ -10,7 +10,7 @@ export default function WorkspaceStatus({
 
   return (
     <div
-      className={`absolute left-4 top-4 rounded-xl border px-3 py-2 text-xs backdrop-blur-2xl transition-all duration-300 ${
+      className={`absolute left-4 top-4 rounded-xl border px-3 py-2 gm-glass text-xs transition-all duration-300 ${
         isDark
           ? 'border-white/[0.12] bg-neutral-950/55 text-neutral-300 shadow-[0_8px_30px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.04)]'
           : 'border-white/80 bg-white/55 text-gray-600 shadow-[0_8px_30px_rgba(15,23,42,0.07),inset_0_1px_0_rgba(255,255,255,0.65)]'

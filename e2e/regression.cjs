@@ -8,6 +8,7 @@ const { chromium } = require("playwright-core");
 const WEB = process.env.E2E_WEB || "http://localhost:5174";
 const OVERPASS = process.env.E2E_OVERPASS || "http://127.0.0.1:9100";
 const LLM = process.env.E2E_LLM || "http://127.0.0.1:9101";
+const API = process.env.E2E_API || "http://127.0.0.1:8001";
 const CHROME = process.env.CHROME_PATH || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const TIMEOUT = 60000;
 
@@ -501,6 +502,373 @@ const setMode = (base, mode) => fetch(`${base}/mode/${mode}`);
       await setMode(OVERPASS, "normal");
     }
     await page.getByRole("button", { name: "Close research panel" }).click();
+  });
+
+  // Milestone 9.3: evidence-based research insights.
+  const executed = async (question) => {
+    const turn = await executeTurn(question);
+    await turn.getByRole("button", { name: "Execute Research" }).click();
+    await turn.getByText(/^Research (executed|execution failed)/).first().waitFor();
+    return turn;
+  };
+
+  await journey("26. Generate evidence-based research insights", async () => {
+    await sidebar("Ask AI").click();
+    await page.getByRole("button", { name: "Use current map centre" }).click();
+    if ((await page.getByText("Area B set").count()) === 0) {
+      await page.getByText("Compare with a second area").click();
+      await page.getByRole("button", { name: "Pick area b on map" }).click();
+      await page.mouse.click(600, 300);
+      await page.getByText("Area B set").waitFor();
+    }
+    const synthRequests = [];
+    const onRequest = (request) => request.url().includes("/synthesize") && synthRequests.push(request.url());
+    page.on("request", onRequest);
+    try {
+      const turn = await executed(
+        "Compare hospital accessibility between two areas, identify underserved locations, and recommend suitable locations for a new hospital considering population",
+      );
+      check(synthRequests.length === 0, "insights were generated without being requested");
+      const before = await overpassCount();
+      await turn.getByRole("button", { name: "Generate Research Insights" }).click();
+      const insights = turn.getByRole("region", { name: "Research insights" });
+      await insights.waitFor();
+      check((await overpassCount()) === before, "synthesis queried Overpass");
+      check(synthRequests.length === 1, "expected one synthesis request");
+      await insights.getByText("Complete evidence").waitFor();
+      await insights.getByText("Deterministic", { exact: true }).waitFor();
+      const findings = insights.getByRole("list", { name: "Key findings" }).locator(":scope > li");
+      check((await findings.count()) >= 4, "too few findings");
+      await findings.first().locator("summary").click();
+      await findings.first().getByText(/step comparison\.area_a/).first().waitFor();
+      check((await insights.getByRole("table", { name: "Evidence comparisons" }).locator("tbody tr").count()) === 5, "expected 5 metrics");
+      check((await insights.getByRole("list", { name: "Candidate insights" }).locator(":scope > li").count()) === 5, "expected 5 candidates");
+      await insights.getByText("No overall winner is declared; each metric stands on its own.").waitFor();
+      await insights.getByLabel("Not analysed").getByText(/Population or demographic data/).waitFor();
+      check((await turn.getByRole("button", { name: "Generate Research Insights" }).count()) === 0, "button still offered");
+    } finally {
+      page.off("request", onRequest);
+    }
+  });
+
+  await journey("27. Partial evidence is labelled with its warnings", async () => {
+    await setMode(OVERPASS, "fail_context");
+    try {
+      const turn = await executed("Find suitable locations for a new hospital");
+      await turn.getByRole("button", { name: "Generate Research Insights" }).click();
+      const insights = turn.getByRole("region", { name: "Research insights" });
+      await insights.getByText("Partial evidence").waitFor();
+      await insights.getByRole("list", { name: "Data-quality warnings" }).getByText(/was unavailable/).waitFor();
+      await insights.getByText(/incomplete/).first().waitFor();
+    } finally {
+      await setMode(OVERPASS, "normal");
+    }
+  });
+
+  await journey("28. A failed run yields no conclusions", async () => {
+    await setMode(OVERPASS, "fail_all");
+    try {
+      const turn = await executed("Identify areas with poor hospital coverage around this location");
+      await turn.getByRole("button", { name: "Generate Research Insights" }).click();
+      const insights = turn.getByRole("region", { name: "Research insights" });
+      await insights.getByText("No results to analyse").waitFor();
+      check((await insights.getByRole("list", { name: "Key findings" }).count()) === 0, "failed run produced findings");
+    } finally {
+      await setMode(OVERPASS, "normal");
+    }
+  });
+
+  await journey("29. Expired execution asks to run the research again", async () => {
+    const turn = await executed("Identify areas with poor hospital coverage around this location");
+    expectedFailureUrl = "/synthesize";
+    await page.route("**/synthesize", (route) =>
+      route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Execution not found. Run the research again." }),
+      }),
+    );
+    try {
+      await turn.getByRole("button", { name: "Generate Research Insights" }).click();
+      await turn.getByText("Execution not found. Run the research again.").waitFor();
+      check(await turn.getByRole("button", { name: "Generate Research Insights" }).isEnabled(), "cannot retry");
+    } finally {
+      await page.unroute("**/synthesize");
+      expectedFailureUrl = null;
+    }
+    await page.getByRole("button", { name: "Close research panel" }).click();
+  });
+
+  // Milestone 9.4: professional research reports.
+  const reportSection = (turn) => turn.getByRole("region", { name: "Research report" });
+  const download = async (turn) => {
+    const pending = page.waitForEvent("download");
+    await reportSection(turn).getByRole("button", { name: "Generate Research Report" }).click();
+    const file = await pending;
+    return { name: file.suggestedFilename(), bytes: fs.readFileSync(await file.path()) };
+  };
+
+  await journey("30. Report controls appear only after insights; PDF download", async () => {
+    await sidebar("Ask AI").click();
+    await page.getByRole("button", { name: "Use current map centre" }).click();
+    const turn = await executed("Identify areas with poor hospital coverage around this location");
+    check((await reportSection(turn).count()) === 0, "report offered before insights");
+    await turn.getByRole("button", { name: "Generate Research Insights" }).click();
+    await turn.getByRole("region", { name: "Research insights" }).waitFor();
+    await reportSection(turn).waitFor();
+    check((await reportSection(turn).getByRole("radio", { name: /PDF/ }).getAttribute("aria-checked")) === "true", "PDF not default");
+    const before = await overpassCount();
+    const { name, bytes } = await download(turn);
+    check(/^geomind-research-rx-[0-9a-f]+\.pdf$/.test(name), `filename ${name}`);
+    check(bytes.subarray(0, 5).toString() === "%PDF-" && bytes.subarray(-1024).toString().includes("%%EOF"), "not a PDF");
+    check(bytes.toString("latin1").includes("/Type /Page"), "PDF has no pages");
+    await reportSection(turn).getByText(`Downloaded ${name}`).waitFor();
+    check((await overpassCount()) === before, "report generation queried Overpass");
+  });
+
+  await journey("31. DOCX download from the same insights", async () => {
+    const turn = lastTurn();
+    await reportSection(turn).getByRole("radio", { name: /DOCX/ }).click();
+    const { name, bytes } = await download(turn);
+    check(name.endsWith(".docx"), `filename ${name}`);
+    check(bytes.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])), "not a zip container");
+    const listing = bytes.toString("latin1");
+    check(listing.includes("word/document.xml") && listing.includes("[Content_Types].xml"), "not a Word document");
+    check((await turn.getByRole("button", { name: "Execute Research" }).count()) === 0, "research re-run offered");
+  });
+
+  await journey("32. Report loading and expired-execution errors", async () => {
+    const turn = lastTurn();
+    expectedFailureUrl = "/report";
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    await page.route("**/report", async (route) => {
+      await held;
+      await route.fulfill({
+        status: 404, contentType: "application/json",
+        body: JSON.stringify({ detail: "Execution not found. Executions are kept in memory for 30 minutes. Run the research again." }),
+      });
+    });
+    try {
+      await reportSection(turn).getByRole("button", { name: "Generate Research Report" }).click();
+      await reportSection(turn).getByRole("button", { name: "Building report…" }).waitFor();
+      check(await reportSection(turn).getByRole("button", { name: "Building report…" }).isDisabled(), "not disabled while loading");
+      release();
+      await reportSection(turn).getByRole("alert").getByText(/Run the research again/).waitFor();
+      check(await reportSection(turn).getByRole("button", { name: "Generate Research Report" }).isEnabled(), "cannot retry");
+    } finally {
+      await page.unroute("**/report");
+      expectedFailureUrl = null;
+    }
+  });
+
+  await journey("33. Report controls in light and dark themes", async () => {
+    const turn = lastTurn();
+    const button = reportSection(turn).getByRole("button", { name: "Generate Research Report" });
+    const colour = () => button.evaluate((element) => getComputedStyle(element).backgroundColor);
+    await sidebar("Map Settings").click();
+    await page.getByRole("button", { name: "light", exact: true }).click();
+    await page.waitForFunction(() => !document.documentElement.classList.contains("dark"));
+    await button.waitFor();
+    const light = await colour();
+    await page.getByRole("button", { name: "dark", exact: true }).click();
+    await page.waitForFunction(() => document.documentElement.classList.contains("dark"));
+    const dark = await colour();
+    check(light === dark && /rgb\(16, 185, 129\)|oklch/.test(light), `emerald button: ${light} / ${dark}`);
+    await closePanel("Map Settings");
+    await page.getByRole("button", { name: "Close research panel" }).click();
+  });
+
+  // Milestone 9.5: research workspace and report history.
+  const workspaceButton = () => page.getByRole("button", { name: "Research workspace" });
+  const workspaceList = () => page.getByRole("region", { name: "Research workspace" });
+  const sessionView = () => page.getByRole("region", { name: "Research session" });
+  const openWorkspace = async () => {
+    if ((await workspaceButton().getAttribute("aria-pressed")) !== "true") await workspaceButton().click();
+  };
+  const closeWorkspace = async () => {
+    if ((await workspaceButton().getAttribute("aria-pressed")) === "true") await workspaceButton().click();
+  };
+  const sessionTotal = async () => {
+    const key = await page.evaluate(() => localStorage.getItem("geomind-research-workspace"));
+    const response = await fetch(`${API}/api/research/sessions?limit=1`, { headers: { "X-GeoMind-Workspace": key } });
+    return (await response.json()).total;
+  };
+  const WORKSPACE_Q = "Identify areas with poor hospital coverage around this location for the workspace study";
+
+  await journey("34. Empty research workspace guides the user", async () => {
+    const fresh = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const other = await fresh.newPage();
+    await other.route((url) => !["localhost", "127.0.0.1"].includes(url.hostname), (route) =>
+      route.fulfill({ status: 200, contentType: route.request().url().includes("fonts.googleapis") ? "text/css" : "image/png", body: "" }));
+    try {
+      await other.goto(WEB);
+      await other.getByRole("button", { name: "Ask AI" }).first().click();
+      await other.getByRole("button", { name: "Research workspace" }).click();
+      const region = other.getByRole("region", { name: "Research workspace" });
+      await region.getByText("No research yet").waitFor();
+      await region.getByText(/not permanently saved/).waitFor();
+      await region.getByText(/not private/).waitFor();
+      await region.getByRole("button", { name: "Start research" }).click();
+      await other.locator("#research-question").waitFor();
+      check(await other.locator("#research-question").isVisible(), "conversation not restored");
+    } finally {
+      await fresh.close();
+    }
+  });
+
+  await journey("35. Research is saved as a session with insights and report history", async () => {
+    await sidebar("Ask AI").click();
+    await closeWorkspace();
+    await page.getByRole("button", { name: "Use current map centre" }).click();
+    const before = await sessionTotal();
+    const turn = await executed(WORKSPACE_Q);
+    check((await sessionTotal()) === before + 1, "planning should create exactly one session");
+    await turn.getByRole("button", { name: "Generate Research Insights" }).click();
+    await turn.getByRole("region", { name: "Research insights" }).waitFor();
+    await download(turn);
+
+    await openWorkspace();
+    await workspaceList().getByLabel("Search research").fill("workspace study");
+    const entry = workspaceList().getByRole("listitem").filter({ hasText: "workspace study" }).first();
+    await entry.getByText("Completed").waitFor();
+    await entry.getByText("Insights", { exact: true }).waitFor();
+    await entry.getByText("1 report").waitFor();
+    await entry.getByRole("button").click();
+    const view = sessionView();
+    await view.getByText(WORKSPACE_Q).first().waitFor();
+    const statuses = await view.getByRole("list", { name: "Planned steps" }).locator(":scope > li")
+      .evaluateAll((items) => items.map((item) => item.getAttribute("data-execution-status")));
+    check(statuses.every((s) => s === "completed"), `steps ${statuses}`);
+    await view.getByLabel("Results summary").getByText("Service coverage analysis").waitFor();
+    await view.getByRole("region", { name: "Research insights" }).waitFor();
+    const history = view.getByLabel("Report history").locator("li");
+    check((await history.count()) === 1, "expected one report record");
+    await history.first().getByText("Can be regenerated above").waitFor();
+    // Regenerate a DOCX from the session itself: history grows, no new run.
+    const runsBefore = await overpassCount();
+    await view.getByRole("region", { name: "Research report" }).getByRole("radio", { name: /DOCX/ }).click();
+    const pending = page.waitForEvent("download");
+    await view.getByRole("region", { name: "Research report" }).getByRole("button", { name: "Generate Research Report" }).click();
+    check((await pending).suggestedFilename().endsWith(".docx"), "no DOCX");
+    await view.getByLabel("Report history").locator("li").nth(1).waitFor();
+    check((await overpassCount()) === runsBefore, "reopening or reporting re-ran the research");
+  });
+
+  await journey("36. Switching sessions never shows stale data", async () => {
+    const first = await sessionView().getAttribute("data-session");
+    await sessionView().getByRole("button", { name: "All research" }).click();
+    await workspaceList().getByLabel("Search research").fill("suitable locations for a new hospital");
+    await workspaceList().getByRole("button", { name: /suitable locations for a new hospital/i }).first().click();
+    await page.waitForFunction((id) => {
+      const element = document.querySelector('[aria-label="Research session"][data-session]');
+      return element && element.getAttribute("data-session") !== id;
+    }, first);
+    const view = sessionView();
+    check((await view.getByText(WORKSPACE_Q).count()) === 0, "previous session's question still shown");
+    await view.getByText(/suitable locations for a new hospital/i).first().waitFor();
+  });
+
+  await journey("37. Refreshing restores the session without duplicates", async () => {
+    const id = await sessionView().getAttribute("data-session");
+    const total = await sessionTotal();
+    await page.reload();
+    await sidebar("Ask AI").click();
+    await page.locator(`[aria-label="Research session"][data-session="${id}"]`).waitFor();
+    check((await sessionTotal()) === total, "refresh created a session");
+  });
+
+  await journey("38. Expired execution data is explained honestly", async () => {
+    await page.route("**/api/research/sessions/ses-*", async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      const response = await route.fetch();
+      const data = await response.json();
+      data.availability = { ...data.availability, execution: "expired", reports: data.reports.length ? "unavailable" : "none",
+        note: "The execution data has expired (kept in memory for 30 minutes, lost on restart). To download reports again, run the research again." };
+      data.reports = data.reports.map((r) => ({ ...r, availability: "unavailable" }));
+      await route.fulfill({ response, json: data });
+    });
+    try {
+      await sessionView().getByRole("button", { name: "All research" }).click();
+      await workspaceList().getByLabel("Search research").fill("workspace study");
+      await workspaceList().getByRole("button", { name: /workspace study/ }).first().click();
+      const view = sessionView();
+      await view.getByLabel("Data availability").getByText(/has expired/).waitFor();
+      await view.getByText("Unavailable: run the research again").first().waitFor();
+      check((await view.getByRole("region", { name: "Research report" }).count()) === 0, "offered a report without data");
+      await view.getByRole("region", { name: "Research insights" }).waitFor(); // kept with the session
+    } finally {
+      await page.unroute("**/api/research/sessions/ses-*");
+    }
+  });
+
+  await journey("39. Workspace loading and error states recover", async () => {
+    expectedFailureUrl = "/api/research/sessions";
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    await page.route("**/api/research/sessions?*", async (route) => {
+      await held;
+      await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "Sessions are unavailable right now." }) });
+    });
+    try {
+      await sessionView().getByRole("button", { name: "All research" }).click();
+      await workspaceList().getByRole("status").getByText(/Loading research…|Refreshing research…/).waitFor();
+      release();
+      await workspaceList().getByRole("alert").getByText("Sessions are unavailable right now.").waitFor();
+    } finally {
+      await page.unroute("**/api/research/sessions?*");
+      expectedFailureUrl = null;
+    }
+    await workspaceList().getByRole("button", { name: "Retry" }).click();
+    await workspaceList().getByRole("list", { name: "Research sessions" }).locator(":scope > li").first().waitFor();
+  });
+
+  await journey("40. Workspace in light and dark themes", async () => {
+    const list = workspaceList();
+    await sidebar("Map Settings").click();
+    await page.getByRole("button", { name: "light", exact: true }).click();
+    await page.waitForFunction(() => !document.documentElement.classList.contains("dark"));
+    await list.getByRole("button", { name: "New research" }).waitFor();
+    const panel = await page.locator("aside").last().evaluate((el) => getComputedStyle(el).color);
+    await page.getByRole("button", { name: "dark", exact: true }).click();
+    await page.waitForFunction(() => document.documentElement.classList.contains("dark"));
+    const darkPanel = await page.locator("aside").last().evaluate((el) => getComputedStyle(el).color);
+    check(panel !== darkPanel, "theme did not change the workspace");
+    await closePanel("Map Settings");
+    await closeWorkspace();
+    await page.getByRole("button", { name: "Close research panel" }).click();
+  });
+
+  await journey("41. Animations run normally and respect reduced motion", async () => {
+    const timing = (target) => target.evaluate(() => {
+      const press = document.querySelector(".gm-press");
+      const sidebar = document.querySelector("aside");
+      return {
+        press: parseFloat(getComputedStyle(press).transitionDuration),
+        sidebar: parseFloat(getComputedStyle(sidebar).transitionDuration),
+      };
+    });
+    const normal = await timing(page);
+    check(normal.press >= 0.1 && normal.sidebar >= 0.2, `normal motion ${JSON.stringify(normal)}`);
+
+    const reduced = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
+    const other = await reduced.newPage();
+    await other.route((url) => !["localhost", "127.0.0.1"].includes(url.hostname), (route) =>
+      route.fulfill({ status: 200, contentType: route.request().url().includes("fonts.googleapis") ? "text/css" : "image/png", body: "" }));
+    try {
+      await other.goto(WEB);
+      await other.getByRole("button", { name: "Ask AI" }).first().click();
+      await other.getByRole("button", { name: "Research workspace" }).waitFor();
+      const calm = await timing(other);
+      check(calm.press < 0.001 && calm.sidebar < 0.001, `reduced motion ${JSON.stringify(calm)}`);
+      const animated = await other.evaluate(() =>
+        [...document.querySelectorAll("*")].some((el) => parseFloat(getComputedStyle(el).animationDuration) > 0.001));
+      check(!animated, "an animation still runs with reduced motion");
+      await other.getByRole("button", { name: "Expand navigation" }).click();
+      await other.getByRole("button", { name: "Collapse navigation" }).waitFor();
+    } finally {
+      await reduced.close();
+    }
   });
 
   await journey("Phone width has no horizontal scroll", async () => {

@@ -77,7 +77,7 @@ export default function GeoJSONImport({
         role="dialog"
         aria-modal="true"
         aria-labelledby="geojson-import-title"
-        className={`relative z-10 w-full max-w-md rounded-2xl border p-5 shadow-2xl ${
+        className={`gm-glass-strong relative z-10 w-full max-w-md rounded-2xl border p-5 shadow-2xl ${
           isDark
             ? 'border-neutral-800 bg-neutral-950 text-white'
             : 'border-gray-200 bg-white text-black'

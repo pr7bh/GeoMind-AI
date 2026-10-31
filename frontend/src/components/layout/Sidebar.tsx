@@ -28,7 +28,7 @@ export default function Sidebar({
     ? 'text-neutral-400 hover:bg-white/[0.06] hover:text-neutral-100'
     : 'text-gray-500 hover:bg-gray-900/[0.05] hover:text-gray-900';
 
-  const tooltipClass = `pointer-events-none absolute left-full top-1/2 z-50 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-xs font-medium opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100 max-[900px]:hidden ${
+  const tooltipClass = `pointer-events-none absolute left-full top-1/2 z-50 ml-3 -translate-y-1/2 gm-glass whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-xs font-medium -translate-x-1 opacity-0 shadow-lg transition-[opacity,translate] duration-150 ease-[var(--gm-ease-out)] group-hover:translate-x-0 group-hover:opacity-100 group-focus-visible:translate-x-0 group-focus-visible:opacity-100 max-[900px]:hidden ${
     isDark
       ? 'border-white/10 bg-neutral-950/90 text-neutral-100'
       : 'border-gray-200 bg-white text-gray-900'
@@ -49,7 +49,7 @@ export default function Sidebar({
         onClick={onClick}
         aria-label={title}
         aria-pressed={active}
-        className={`group relative flex h-11 shrink-0 items-center rounded-xl transition-colors duration-150 ${
+        className={`gm-press group relative flex h-11 shrink-0 items-center rounded-xl transition-colors duration-150 ${
           expanded ? 'w-full gap-3 px-3' : 'w-11 flex-col justify-center gap-0.5'
         } ${
           active
@@ -61,7 +61,7 @@ export default function Sidebar({
       >
         {active && (
           <span
-            className={`absolute -left-2 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full ${
+            className={`gm-indicator-in absolute -left-2 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full ${
               isDark ? 'bg-emerald-400' : 'bg-emerald-600'
             }`}
           />
@@ -74,7 +74,7 @@ export default function Sidebar({
         />
 
         {expanded ? (
-          <span className="truncate text-sm font-medium">{title}</span>
+          <span className="gm-fade-in truncate text-sm font-medium">{title}</span>
         ) : (
           <>
             <span className="text-[8px] font-medium leading-tight">{label}</span>
@@ -90,7 +90,7 @@ export default function Sidebar({
   return (
     // Floats over the map below the header; the map is never resized.
     <aside
-      className={`absolute bottom-3 left-3 top-[5.5rem] z-40 flex flex-col rounded-2xl border py-2 backdrop-blur-2xl transition-[width] duration-200 max-[900px]:bottom-2 max-[900px]:left-2 max-[900px]:top-[4.5rem] max-[900px]:w-14 ${
+      className={`absolute bottom-3 left-3 top-[5.5rem] z-40 flex flex-col gm-glass rounded-2xl border py-2 transition-[width] duration-300 ease-[var(--gm-ease-out)] max-[900px]:bottom-2 max-[900px]:left-2 max-[900px]:top-[4.5rem] max-[900px]:w-14 ${
         expanded ? 'w-44 px-2' : 'w-16 items-center'
       } ${
         isDark
@@ -120,7 +120,7 @@ export default function Sidebar({
           onClick={onToggleResearch}
           aria-label="Ask AI"
           aria-pressed={isResearchOpen}
-          className={`group relative flex h-11 shrink-0 items-center rounded-xl border transition-colors duration-150 ${
+          className={`gm-press group relative flex h-11 shrink-0 items-center rounded-xl border transition-colors duration-150 ${
             expanded ? 'w-full gap-3 px-3' : 'w-11 flex-col justify-center gap-0.5'
           } ${
             isResearchOpen
@@ -132,7 +132,7 @@ export default function Sidebar({
         >
           <Bot size={expanded ? 18 : 19} strokeWidth={1.8} className="shrink-0" />
           {expanded ? (
-            <span className="text-sm font-semibold">Ask AI</span>
+            <span className="gm-fade-in text-sm font-semibold">Ask AI</span>
           ) : (
             <>
               <span className="text-[8px] font-semibold leading-tight">Ask AI</span>
@@ -148,13 +148,13 @@ export default function Sidebar({
           onClick={onToggleExpanded}
           aria-label={expanded ? 'Collapse navigation' : 'Expand navigation'}
           aria-expanded={expanded}
-          className={`group relative flex h-9 shrink-0 items-center rounded-xl transition-colors duration-150 max-[900px]:hidden ${
+          className={`gm-press group relative flex h-9 shrink-0 items-center rounded-xl transition-colors duration-150 max-[900px]:hidden ${
             expanded ? 'w-full gap-3 px-3' : 'w-11 justify-center'
           } ${inactiveClass}`}
         >
           {expanded ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
           {expanded ? (
-            <span className="text-xs font-medium">Collapse</span>
+            <span className="gm-fade-in text-xs font-medium">Collapse</span>
           ) : (
             <span role="tooltip" className={tooltipClass}>
               Expand navigation

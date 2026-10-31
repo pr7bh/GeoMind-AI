@@ -259,7 +259,7 @@ export default function FeatureInspector({
 
   const panel = (
       <aside
-        className={`flex h-full w-full flex-col overflow-hidden rounded-2xl border backdrop-blur-2xl transition-colors duration-300 ${
+        className={`flex h-full w-full flex-col gm-glass-strong overflow-hidden rounded-2xl border transition-colors duration-300 ${
           isDark
             ? "border-white/12 bg-neutral-950/65 text-neutral-100 shadow-[0_20px_60px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.04)]"
             : "border-white/80 bg-white/65 text-gray-900 shadow-[0_20px_60px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.7)]"
@@ -412,7 +412,7 @@ export default function FeatureInspector({
                 {isLinear &&
                   feature.lengthMeters !== undefined && (
                     <div
-                      className={`rounded-xl border p-3 backdrop-blur-xl ${
+                      className={`gm-glass-card rounded-xl border p-3 ${
                         isDark
                           ? "border-white/8 bg-white/[0.035]"
                           : "border-white/80 bg-white/45"
@@ -437,7 +437,7 @@ export default function FeatureInspector({
                 {isAreal &&
                   feature.areaSquareMeters !== undefined && (
                     <div
-                      className={`rounded-xl border p-3 backdrop-blur-xl ${
+                      className={`gm-glass-card rounded-xl border p-3 ${
                         isDark
                           ? "border-white/8 bg-white/[0.035]"
                           : "border-white/80 bg-white/45"
@@ -462,7 +462,7 @@ export default function FeatureInspector({
                 {isAreal &&
                   feature.perimeterMeters !== undefined && (
                     <div
-                      className={`rounded-xl border p-3 backdrop-blur-xl ${
+                      className={`gm-glass-card rounded-xl border p-3 ${
                         isDark
                           ? "border-white/8 bg-white/[0.035]"
                           : "border-white/80 bg-white/45"
@@ -504,7 +504,7 @@ export default function FeatureInspector({
 
               {backendArea && (
                 <div
-                  className={`mt-3 rounded-xl border p-3 backdrop-blur-xl ${
+                  className={`mt-3 gm-glass-card rounded-xl border p-3 ${
                     isDark
                       ? "border-emerald-400/20 bg-emerald-400/6"
                       : "border-emerald-200/70 bg-emerald-50/60"
@@ -608,7 +608,7 @@ export default function FeatureInspector({
                 onChange={(event) =>
                   setBufferDistance(Number(event.target.value))
                 }
-                className={`w-full rounded-xl border px-3 py-2.5 text-sm outline-none backdrop-blur-xl transition-colors focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 ${
+                className={`w-full rounded-xl border px-3 py-2.5 gm-glass-field text-sm outline-none transition-colors focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 ${
                   isDark
                     ? "border-white/10 bg-white/[0.035] text-white placeholder:text-neutral-500"
                     : "border-white/80 bg-white/50 text-gray-900 placeholder:text-gray-400"
@@ -645,7 +645,7 @@ export default function FeatureInspector({
           {/* Point-in-polygon results */}
           {pointAnalysisResult && (
             <section
-              className={`rounded-xl border p-3 backdrop-blur-xl ${
+              className={`gm-glass-card rounded-xl border p-3 ${
                 isDark
                   ? "border-emerald-400/20 bg-emerald-400/5"
                   : "border-emerald-200/70 bg-emerald-50/50"

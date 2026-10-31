@@ -4,6 +4,7 @@ export const API_BASE_URL = (
 
 export interface RequestOptions {
   signal?: AbortSignal;
+  headers?: Record<string, string>;
 }
 
 export function isAbortError(error: unknown): boolean {
@@ -34,7 +35,7 @@ export function getJSON<T>(
 ): Promise<T> {
   return request<T>(
     path,
-    { method: "GET", signal: options.signal },
+    { method: "GET", signal: options.signal, headers: options.headers },
     fallbackError,
   );
 }
@@ -51,8 +52,29 @@ export function postJSON<T>(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...options.headers,
       },
       body: JSON.stringify(body),
+      signal: options.signal,
+    },
+    fallbackError,
+  );
+}
+
+/** PATCH / DELETE with an optional JSON body (DELETE responses may be empty). */
+export function sendJSON<T>(
+  method: "PATCH" | "DELETE",
+  path: string,
+  body: unknown,
+  fallbackError: string,
+  options: RequestOptions = {},
+): Promise<T> {
+  return request<T>(
+    path,
+    {
+      method,
+      headers: { "Content-Type": "application/json", ...options.headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
       signal: options.signal,
     },
     fallbackError,

@@ -25,7 +25,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.schemas.research import ResearchPlan, ResearchStep
-from app.services import research_planner
+from app.services import research_evidence, research_planner
 from app.services.agent.runner import execute_tool
 from app.services.agent.tools import TOOLS as AGENT_TOOLS
 from app.services.agent.tools import AgentContext
@@ -223,6 +223,12 @@ class Execution:
     cancel_requested: bool = False
     task: asyncio.Task | None = None
     records: dict[str, StepRecord] = field(default_factory=dict)
+    # Compact evidence kept after GIS payloads are released (for synthesis),
+    # and the latest synthesis per mode.
+    digest: dict[str, Any] | None = None
+    syntheses: dict[str, Any] = field(default_factory=dict)
+    # Research session that owns this execution (set server-side only).
+    session_id: str | None = None
 
     def __post_init__(self) -> None:
         self.records = {s.id: StepRecord(s) for s in self.steps}
@@ -266,6 +272,7 @@ class Execution:
             "warnings": self.warnings,
             "errors": self.errors,
             "results": self.summaries,
+            "synthesis_available": self.digest is not None,
             "created_at": _iso(self.created_at),
             "started_at": _iso(self.started_at),
             "finished_at": _iso(self.finished_at),
@@ -613,6 +620,11 @@ class Orchestrator:
             {k: r[k] for k in ("capability_id", "title", "outcome", "message")} | {"layer_count": len(r["layers"])}
             for r in results
         ]
+        try:
+            self.execution.digest = research_evidence.build_digest(self.execution.plan, self.execution.public(), results)
+        except Exception:  # noqa: BLE001 - synthesis is optional; never fail the run
+            logger.exception("Evidence digest failed for %s", self.execution.id)
+            self.execution.digest = None
         return {**self.execution.public(), "results": results}
 
 

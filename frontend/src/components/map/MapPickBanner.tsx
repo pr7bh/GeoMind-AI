@@ -11,7 +11,7 @@ export default function MapPickBanner({ isDark, pick, onCancel }: MapPickBannerP
   return (
     <div
       role="status"
-      className={`pointer-events-auto flex items-center gap-3 rounded-xl border py-2 pl-3 pr-2 text-xs shadow-lg backdrop-blur-2xl max-[900px]:gap-2 ${
+      className={`pointer-events-auto flex items-center gap-3 rounded-xl border py-2 pl-3 pr-2 gm-glass text-xs shadow-lg max-[900px]:gap-2 ${
         isDark
           ? "border-amber-400/30 bg-neutral-950/85 text-neutral-100 shadow-black/40"
           : "border-amber-400/40 bg-white/90 text-gray-900 shadow-gray-900/10"

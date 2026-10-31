@@ -217,10 +217,10 @@ export default function SpatialQueryTool({
         <select
           value={operation}
           onChange={(event) => setOperation(event.target.value as SpatialOperation)}
-          className={`mt-1.5 w-full rounded-xl border p-2.5 text-sm outline-none transition-all focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/10 ${
+          className={`gm-glass-field mt-1.5 w-full rounded-xl border p-2.5 text-sm outline-none transition-all focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/10 ${
             isDark
-              ? "border-white/10 bg-neutral-900/60 text-white hover:border-white/20"
-              : "border-gray-200 bg-white/60 text-black hover:border-emerald-500/30"
+              ? "border-white/10 text-white hover:border-white/20"
+              : "border-gray-200 text-black hover:border-emerald-500/30"
           }`}
         >
           <option value="intersects">Intersects</option>

@@ -16,7 +16,7 @@ export default function AppHeader({ theme, center, actions }: AppHeaderProps) {
     // Floats over the full-screen map; only the bar itself takes clicks.
     <div className="pointer-events-none absolute inset-x-3 top-3 z-40 max-[900px]:inset-x-2 max-[900px]:top-2">
     <header
-      className={`pointer-events-auto flex h-[60px] items-center gap-3 rounded-2xl border px-3 backdrop-blur-2xl transition-colors duration-200 max-[900px]:h-14 max-[900px]:gap-2 max-[900px]:px-2 ${
+      className={`pointer-events-auto flex h-[60px] items-center gap-3 gm-glass rounded-2xl border px-3 transition-colors duration-200 max-[900px]:h-14 max-[900px]:gap-2 max-[900px]:px-2 ${
         isDark
           ? 'border-white/10 bg-neutral-950/60 shadow-[0_8px_32px_rgba(0,0,0,0.35)]'
           : 'border-gray-200/70 bg-white/70 shadow-[0_8px_32px_rgba(15,23,42,0.10)]'

@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronRight,
   CircleSlash,
+  LayoutList,
   ListChecks,
   LoaderCircle,
   MapPlus,
@@ -17,8 +18,15 @@ import {
 } from "lucide-react";
 import { isAbortError } from "../../lib/api";
 import { getAgentStatus, streamAgentChat } from "../../lib/agentClient";
-import { cancelExecution, executeResearch, planResearch } from "../../lib/researchClient";
-import type { ExecutionEvent, ResearchPlan } from "../../lib/researchClient";
+import {
+  cancelExecution,
+  createSession,
+  executeResearch,
+  newClientToken,
+  planResearch,
+  synthesizeExecution,
+} from "../../lib/researchClient";
+import type { ExecutionEvent, ResearchPlan, ResearchSynthesis, SessionDetail } from "../../lib/researchClient";
 import type {
   AgentLayer,
   AgentResponse,
@@ -34,6 +42,9 @@ import WorkflowView from "./WorkflowView";
 import SuitabilityConfig from "./SuitabilityConfig";
 import ResearchPlanView from "./ResearchPlanView";
 import ResearchExecutionView from "./ResearchExecutionView";
+import ResearchInsightsView from "./ResearchInsightsView";
+import ResearchReportControls from "./ResearchReportControls";
+import ResearchWorkspace from "./ResearchWorkspace";
 import type { ExecutionUIState } from "./ResearchExecutionView";
 import { AREA_COLORS, COVERAGE_PALETTE } from "../../lib/coverage";
 import { SCORE_PALETTE } from "../../lib/suitability";
@@ -71,6 +82,8 @@ interface Turn {
   id: number;
   // "plan": research planning only (nothing is executed).
   kind: "ask" | "plan";
+  // Research session this turn belongs to (workspace history), if saved.
+  sessionId: string | null;
   question: string;
   status: TurnStatus;
   runningTool: string | null;
@@ -81,6 +94,8 @@ interface Turn {
   researchPlan: ResearchPlan | null;
   // Present once the user approved and started executing the plan.
   execution: ExecutionUIState | null;
+  // Evidence-based synthesis of a finished execution (on request).
+  insights: { loading: boolean; data: ResearchSynthesis | null; error: string | null } | null;
   error: string | null;
   addedLayers: number[];
   addedResultLayers: string[];
@@ -97,6 +112,15 @@ const EXAMPLES = [
 ];
 
 const NEAREST_KEYWORDS = ["nearest", "closest", "nearby"];
+const VIEW_KEY = "geomind-research-view";
+
+function readView(): "conversation" | "workspace" {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "workspace" ? "workspace" : "conversation";
+  } catch {
+    return "conversation";
+  }
+}
 
 export default function ResearchPanel({
   theme,
@@ -119,6 +143,9 @@ export default function ResearchPanel({
   // Second centre for Area A vs Area B comparisons ("location" is Area A).
   const [areaB, setAreaB] = useState<[number, number] | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
+  const [view, setView] = useState<"conversation" | "workspace">(readView);
+  // Bumped whenever a session changes, so the workspace reloads it.
+  const [sessionsVersion, setSessionsVersion] = useState(0);
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [statusError, setStatusError] = useState("");
   const controllerRef = useRef<AbortController | null>(null);
@@ -190,6 +217,7 @@ export default function ResearchPanel({
       {
         id,
         kind: "ask",
+        sessionId: null,
         question: message,
         status: "thinking",
         runningTool: null,
@@ -198,6 +226,7 @@ export default function ResearchPanel({
         response: null,
         researchPlan: null,
         execution: null,
+        insights: null,
         error: null,
         addedLayers: [],
         addedResultLayers: [],
@@ -301,8 +330,17 @@ export default function ResearchPanel({
     }
   }
 
+  function showView(next: "conversation" | "workspace") {
+    setView(next);
+    try {
+      localStorage.setItem(VIEW_KEY, next);
+    } catch {
+      // The view simply isn't remembered.
+    }
+  }
+
   /** Research planning: returns a validated plan; never runs a step. */
-  async function planQuestion(message: string) {
+  async function planQuestion(message: string, existingSessionId: string | null = null) {
     if (!message || busy) return;
 
     const id = nextId.current++;
@@ -311,6 +349,7 @@ export default function ResearchPanel({
       {
         id,
         kind: "plan",
+        sessionId: existingSessionId,
         question: message,
         status: "thinking",
         runningTool: null,
@@ -319,6 +358,7 @@ export default function ResearchPanel({
         response: null,
         researchPlan: null,
         execution: null,
+        insights: null,
         error: null,
         addedLayers: [],
         addedResultLayers: [],
@@ -330,15 +370,24 @@ export default function ResearchPanel({
     controllerRef.current = controller;
 
     try {
+      // Save the investigation as a session; planning still works if this fails.
+      let sessionId = existingSessionId;
+      if (!sessionId) {
+        sessionId = await createSession(message, newClientToken())
+          .then((session) => session.session_id)
+          .catch(() => null);
+      }
       const researchPlan = await planResearch(
         {
           question: message,
           ...(location ? { coordinates: location } : {}),
           ...(areaB ? { compare_coordinates: areaB } : {}),
+          ...(sessionId ? { session_id: sessionId } : {}),
         },
         controller.signal,
       );
-      updateTurn(id, () => ({ status: "completed", researchPlan }));
+      updateTurn(id, () => ({ status: "completed", researchPlan, sessionId }));
+      setSessionsVersion((version) => version + 1);
     } catch (error) {
       updateTurn(id, () =>
         isAbortError(error)
@@ -354,7 +403,7 @@ export default function ResearchPanel({
   }
 
   /** Run an approved plan; progress streams into the turn's execution state. */
-  async function executePlan(turnId: number, researchPlan: ResearchPlan) {
+  async function executePlan(turnId: number, researchPlan: ResearchPlan, sessionId: string | null) {
     if (busy) return;
 
     const controller = new AbortController();
@@ -384,6 +433,7 @@ export default function ResearchPanel({
             return { execution, runningTool: title };
           }),
         controller.signal,
+        sessionId ?? undefined,
       );
       updateTurn(turnId, (turn) => ({
         status: "completed",
@@ -415,6 +465,54 @@ export default function ResearchPanel({
       }));
     } finally {
       if (controllerRef.current === controller) controllerRef.current = null;
+      setSessionsVersion((version) => version + 1);
+    }
+  }
+
+  /** Continue a saved session in the conversation (optionally running its plan). */
+  function resumeSession(session: SessionDetail, execute: boolean) {
+    if (!session.plan || busy) return;
+    const id = nextId.current++;
+    const plan = session.plan;
+    setTurns((current) => [
+      ...current,
+      {
+        id,
+        kind: "plan",
+        sessionId: session.session_id,
+        question: session.question,
+        status: "completed",
+        runningTool: null,
+        steps: [],
+        plan: null,
+        response: null,
+        researchPlan: plan,
+        execution: null,
+        insights: null,
+        error: null,
+        addedLayers: [],
+        addedResultLayers: [],
+      },
+    ]);
+    showView("conversation");
+    if (execute) void executePlan(id, plan, session.session_id);
+  }
+
+  /** Synthesis reads the execution's retained evidence; nothing is re-run. */
+  async function generateInsights(turnId: number, executionId: string) {
+    updateTurn(turnId, () => ({ insights: { loading: true, data: null, error: null } }));
+    try {
+      const data = await synthesizeExecution(executionId);
+      updateTurn(turnId, () => ({ insights: { loading: false, data, error: null } }));
+      setSessionsVersion((version) => version + 1);
+    } catch (error) {
+      updateTurn(turnId, () => ({
+        insights: {
+          loading: false,
+          data: null,
+          error: error instanceof Error ? error.message : "Unable to generate research insights.",
+        },
+      }));
     }
   }
 
@@ -514,13 +612,11 @@ export default function ResearchPanel({
           ? "AI provider misconfigured"
           : "No LLM configured · direct requests only";
 
-  const card = isDark
-    ? "border-white/10 bg-white/[0.03]"
-    : "border-gray-200 bg-white/70";
+  const card = `gm-glass-card ${isDark ? "border-white/10" : "border-gray-200"}`;
 
   return (
     <aside
-      className={`pointer-events-auto flex h-full w-full flex-col overflow-hidden rounded-2xl border backdrop-blur-2xl transition-colors duration-200 ${
+      className={`pointer-events-auto flex h-full w-full flex-col gm-glass-strong overflow-hidden rounded-2xl border transition-colors duration-200 ${
         isDark
           ? "border-white/10 bg-neutral-950/80 text-neutral-100 shadow-[0_8px_32px_rgba(0,0,0,0.35)]"
           : "border-gray-200/70 bg-white/85 text-gray-900 shadow-[0_8px_32px_rgba(15,23,42,0.10)]"
@@ -556,19 +652,37 @@ export default function ResearchPanel({
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close research panel"
-          title="Close panel"
-          className={`rounded-lg border p-2 transition-colors ${
-            isDark
-              ? "border-white/10 text-neutral-500 hover:bg-white/[0.06] hover:text-white"
-              : "border-gray-200 text-gray-400 hover:bg-gray-100 hover:text-gray-900"
-          }`}
-        >
-          <X size={16} />
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => showView(view === "workspace" ? "conversation" : "workspace")}
+            aria-label="Research workspace"
+            aria-pressed={view === "workspace"}
+            title={view === "workspace" ? "Back to the conversation" : "Research workspace and history"}
+            className={`rounded-lg border p-2 transition-colors ${
+              view === "workspace"
+                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-500"
+                : isDark
+                  ? "border-white/10 text-neutral-500 hover:bg-white/[0.06] hover:text-white"
+                  : "border-gray-200 text-gray-400 hover:bg-gray-100 hover:text-gray-900"
+            }`}
+          >
+            <LayoutList size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close research panel"
+            title="Close panel"
+            className={`rounded-lg border p-2 transition-colors ${
+              isDark
+                ? "border-white/10 text-neutral-500 hover:bg-white/[0.06] hover:text-white"
+                : "border-gray-200 text-gray-400 hover:bg-gray-100 hover:text-gray-900"
+            }`}
+          >
+            <X size={16} />
+          </button>
+        </div>
       </header>
 
       {/* Analysis location */}
@@ -637,10 +751,33 @@ export default function ResearchPanel({
         />
       </div>
 
+      {view === "workspace" && (
+        <ResearchWorkspace
+          isDark={isDark}
+          busy={busy}
+          refreshToken={sessionsVersion}
+          onNewResearch={() => {
+            showView("conversation");
+            window.setTimeout(() => textareaRef.current?.focus(), 0);
+          }}
+          onPickLocation={pickLocation}
+          onPickCompare={pickAreaB}
+          onEditQuestion={(text) => {
+            showView("conversation");
+            editQuestion(text);
+          }}
+          onReplan={(text, sessionId) => {
+            showView("conversation");
+            void planQuestion(text, sessionId);
+          }}
+          onExecute={(session) => resumeSession(session, true)}
+        />
+      )}
+
       {/* Conversation */}
       <div
         ref={scrollRef}
-        className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4"
+        className={`min-h-0 flex-1 space-y-4 overflow-y-auto p-4 ${view === "workspace" ? "hidden" : ""}`}
         aria-live="polite"
       >
         {turns.length === 0 && (
@@ -659,7 +796,7 @@ export default function ResearchPanel({
                   type="button"
                   onClick={() => void ask(example)}
                   disabled={busy}
-                  className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs transition-colors disabled:opacity-50 ${card} hover:border-emerald-500/40`}
+                  className={`gm-press gm-lift flex items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs transition-colors disabled:opacity-50 ${card} hover:border-emerald-500/40`}
                 >
                   <Sparkles size={13} className="shrink-0 text-emerald-500" />
                   {example}
@@ -670,7 +807,7 @@ export default function ResearchPanel({
         )}
 
         {turns.map((turn) => (
-          <article key={turn.id} className="space-y-2">
+          <article key={turn.id} className="gm-fade-up space-y-2">
             <p
               className={`ml-8 rounded-2xl rounded-br-md px-3 py-2 text-xs leading-5 ${
                 isDark ? "bg-emerald-500/15 text-emerald-50" : "bg-emerald-50 text-emerald-950"
@@ -680,10 +817,13 @@ export default function ResearchPanel({
             </p>
 
             <div className={`mr-4 rounded-2xl rounded-bl-md border p-3 ${card}`}>
-              <TurnStatusLine turn={turn} />
+              <TurnStatusLine
+                key={`${turn.status}:${turn.status === "running" ? turn.runningTool : ""}:${turn.execution?.status ?? ""}`}
+                turn={turn}
+              />
 
               {turn.response && (
-                <p className="mt-2 whitespace-pre-line text-xs leading-5">
+                <p className="gm-fade-in mt-2 whitespace-pre-line text-xs leading-5">
                   {turn.response.message}
                 </p>
               )}
@@ -719,8 +859,8 @@ export default function ResearchPanel({
                   onPickLocation={pickLocation}
                   onPickCompare={pickAreaB}
                   onEditQuestion={editQuestion}
-                  onReplan={(text) => void planQuestion(text)}
-                  onExecute={() => turn.researchPlan && void executePlan(turn.id, turn.researchPlan)}
+                  onReplan={(text) => void planQuestion(text, turn.sessionId)}
+                  onExecute={() => turn.researchPlan && void executePlan(turn.id, turn.researchPlan, turn.sessionId)}
                   execution={turn.execution}
                 />
               )}
@@ -734,6 +874,43 @@ export default function ResearchPanel({
                   addedLayers={turn.addedResultLayers}
                   onAddLayer={(layer, key) => addResultLayer(turn.id, layer, key)}
                   onCancel={cancelActive}
+                />
+              )}
+
+              {turn.execution?.id &&
+                !["queued", "running"].includes(turn.execution.status) &&
+                !turn.insights?.data && (
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={turn.insights?.loading}
+                      onClick={() => void generateInsights(turn.id, turn.execution!.id!)}
+                      className={`flex min-h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition disabled:opacity-50 ${
+                        isDark
+                          ? "border-emerald-400/30 text-emerald-400 hover:bg-emerald-400/10"
+                          : "border-emerald-500/40 text-emerald-700 hover:bg-emerald-50"
+                      }`}
+                    >
+                      {turn.insights?.loading ? <LoaderCircle size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                      {turn.insights?.loading ? "Analysing evidence…" : "Generate Research Insights"}
+                    </button>
+                    <span className={`text-[10px] ${muted}`}>Uses these results only; nothing is re-run.</span>
+                    {turn.insights?.error && (
+                      <p className="flex w-full gap-1.5 text-[11px] text-red-400">
+                        <AlertCircle size={13} className="mt-px shrink-0" /> {turn.insights.error}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+              {turn.insights?.data && <ResearchInsightsView isDark={isDark} synthesis={turn.insights.data} />}
+
+              {turn.insights?.data && turn.execution?.id && (
+                <ResearchReportControls
+                  isDark={isDark}
+                  executionId={turn.execution.id}
+                  available={!["failed", "insufficient_evidence"].includes(turn.insights.data.overall_status)}
+                  onGenerated={() => setSessionsVersion((version) => version + 1)}
                 />
               )}
 
@@ -786,7 +963,7 @@ export default function ResearchPanel({
                     type="button"
                     onClick={() => addLayer(turn, index)}
                     disabled={added}
-                    className={`mt-2 flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs font-medium transition-colors disabled:cursor-default ${
+                    className={`gm-press mt-2 flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs font-medium transition-colors disabled:cursor-default ${
                       added
                         ? "border-emerald-500/30 text-emerald-500"
                         : isDark
@@ -853,10 +1030,10 @@ export default function ResearchPanel({
       {/* Composer */}
       <form
         onSubmit={handleSubmit}
-        className={`shrink-0 border-t p-3 ${isDark ? "border-white/10" : "border-gray-200"}`}
+        className={`shrink-0 border-t p-3 ${isDark ? "border-white/10" : "border-gray-200"} ${view === "workspace" ? "hidden" : ""}`}
       >
         <div
-          className={`rounded-xl border transition-colors focus-within:border-emerald-500 ${
+          className={`gm-focus-glow gm-glass-field rounded-xl border transition-colors focus-within:border-emerald-500 ${
             isDark ? "border-white/10 bg-black/40" : "border-gray-200 bg-white"
           }`}
         >
@@ -882,20 +1059,20 @@ export default function ResearchPanel({
               <button
                 type="button"
                 onClick={cancelActive}
-                className={`min-h-8 rounded-lg border px-3 text-xs font-medium ${
+                className={`gm-press gm-fade-in min-h-8 rounded-lg border px-3 text-xs font-medium ${
                   isDark ? "border-white/10 hover:text-red-300" : "border-gray-200 hover:text-red-600"
                 }`}
               >
                 Cancel
               </button>
             ) : (
-              <div className="flex items-center gap-1.5">
+              <div className="gm-fade-in flex items-center gap-1.5">
                 <button
                   type="button"
                   onClick={() => void planQuestion(question.trim())}
                   disabled={!question.trim()}
                   title="Create a research plan without running anything"
-                  className={`flex min-h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                  className={`gm-press flex min-h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
                     isDark
                       ? "border-emerald-400/30 text-emerald-400 hover:bg-emerald-400/10"
                       : "border-emerald-500/40 text-emerald-700 hover:bg-emerald-50"
@@ -906,7 +1083,7 @@ export default function ResearchPanel({
                 <button
                   type="submit"
                   disabled={!question.trim()}
-                  className="flex min-h-8 items-center gap-1.5 rounded-lg bg-emerald-500 px-3 text-xs font-semibold text-black transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="gm-press flex min-h-8 items-center gap-1.5 rounded-lg bg-emerald-500 px-3 text-xs font-semibold text-black transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Ask <ChevronRight size={14} />
                 </button>
@@ -928,13 +1105,17 @@ function patchStep(
 }
 
 function TurnStatusLine({ turn }: { turn: Turn }) {
-  const base = "flex items-center gap-1.5 text-[11px] font-medium";
+  const base = "gm-fade-in flex items-center gap-1.5 text-[11px] font-medium";
 
   switch (turn.status) {
     case "thinking":
       return (
         <p className={`${base} text-amber-500`} role="status">
-          <LoaderCircle size={13} className="animate-spin" />{" "}
+          <span className="gm-dots" aria-hidden>
+            <span />
+            <span />
+            <span />
+          </span>{" "}
           {turn.kind === "plan" ? "Planning research…" : "Thinking…"}
         </p>
       );
@@ -951,8 +1132,8 @@ function TurnStatusLine({ turn }: { turn: Turn }) {
         const cancelled = turn.execution.status === "cancelled";
         const clean = turn.execution.status === "completed";
         return (
-          <p className={`${base} ${failed ? "text-red-400" : cancelled ? "text-neutral-500" : clean ? "text-emerald-500" : "text-amber-500"}`}>
-            {failed ? <AlertCircle size={13} /> : cancelled ? <CircleSlash size={13} /> : <CheckCircle2 size={13} />}
+          <p className={`${base} ${failed ? "gm-nudge text-red-400" : cancelled ? "text-neutral-500" : clean ? "text-emerald-500" : "text-amber-500"}`}>
+            {failed ? <AlertCircle size={13} /> : cancelled ? <CircleSlash size={13} /> : <CheckCircle2 size={13} className="gm-pop" />}
             {failed
               ? "Research execution failed"
               : cancelled
@@ -994,7 +1175,7 @@ function TurnStatusLine({ turn }: { turn: Turn }) {
 
       return (
         <p className={`${base} text-emerald-500`}>
-          <CheckCircle2 size={13} /> Completed
+          <CheckCircle2 size={13} className="gm-pop" /> Completed
           {turn.response?.mode === "llm"
             ? " · LLM"
             : turn.response?.mode === "deterministic"
@@ -1013,7 +1194,7 @@ function TurnStatusLine({ turn }: { turn: Turn }) {
       );
     default:
       return (
-        <p className={`${base} text-red-400`}>
+        <p className={`${base} gm-nudge text-red-400`}>
           <AlertCircle size={13} /> Failed
         </p>
       );

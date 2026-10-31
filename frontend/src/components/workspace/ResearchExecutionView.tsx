@@ -61,10 +61,15 @@ export default function ResearchExecutionView({
   const status = STATUS[execution.status];
 
   return (
-    <section aria-label="Research execution" className={`mt-3 space-y-3 border-t pt-3 ${border}`}>
+    <section aria-label="Research execution" className={`gm-fade-up mt-3 space-y-3 border-t pt-3 ${border}`}>
       <div className="flex flex-wrap items-center gap-2">
-        <span className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${status.className}`}>
-          {active ? <LoaderCircle size={11} className="animate-spin" /> : execution.status === "cancelled" ? <CircleSlash size={11} /> : execution.status === "failed" ? <AlertCircle size={11} /> : <CheckCircle2 size={11} />}
+        <span
+          key={execution.status}
+          className={`gm-fade-in flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${status.className} ${
+            execution.status === "failed" ? "gm-nudge" : ""
+          }`}
+        >
+          {active ? <LoaderCircle size={11} className="animate-spin" /> : execution.status === "cancelled" ? <CircleSlash size={11} /> : execution.status === "failed" ? <AlertCircle size={11} /> : <CheckCircle2 size={11} className="gm-pop" />}
           {status.label}
         </span>
         <span className={`text-[10px] tabular-nums ${muted}`} aria-label="Execution progress">
@@ -74,7 +79,7 @@ export default function ResearchExecutionView({
           <button
             type="button"
             onClick={onCancel}
-            className={`ml-auto flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium ${
+            className={`gm-press gm-fade-in ml-auto flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium ${
               isDark ? "border-white/10 hover:text-red-300" : "border-gray-200 hover:text-red-600"
             }`}
           >
@@ -84,7 +89,7 @@ export default function ResearchExecutionView({
       </div>
 
       {active && currentTitle && (
-        <p className="flex items-center gap-1.5 text-[11px] text-sky-500" role="status">
+        <p key={currentTitle} className="gm-fade-in flex items-center gap-1.5 text-[11px] text-sky-500" role="status">
           <LoaderCircle size={12} className="animate-spin" /> Running: {currentTitle}
         </p>
       )}
@@ -103,7 +108,7 @@ export default function ResearchExecutionView({
       )}
 
       {(execution.warnings.length > 0 || execution.errors.length > 0) && (
-        <ul className="space-y-1 rounded-lg border border-amber-500/30 bg-amber-500/8 px-2.5 py-2 text-[11px] text-amber-500">
+        <ul className="gm-fade-down space-y-1 rounded-lg border border-amber-500/30 bg-amber-500/8 px-2.5 py-2 text-[11px] text-amber-500">
           {[...execution.errors, ...execution.warnings].map((line) => (
             <li key={line} className="flex gap-1.5">
               <AlertTriangle size={12} className="mt-0.5 shrink-0" /> {line}
@@ -112,12 +117,13 @@ export default function ResearchExecutionView({
         </ul>
       )}
 
-      {execution.results.map((result) => (
+      {execution.results.map((result, index) => (
         <div
           role="group"
           key={result.capability_id}
           aria-label={`${result.title} results`}
-          className={`space-y-2 rounded-xl border p-2.5 ${border}`}
+          className={`gm-fade-up gm-glass-card space-y-2 rounded-xl border p-2.5 ${border}`}
+          style={{ animationDelay: `calc(var(--gm-stagger) * ${Math.min(index, 8)})` }}
         >
           <p className="flex items-center gap-2 text-[11px] font-semibold">
             {result.title}
@@ -136,7 +142,7 @@ export default function ResearchExecutionView({
                 type="button"
                 onClick={() => onAddLayer(layer, key)}
                 disabled={added}
-                className={`flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs font-medium transition-colors disabled:cursor-default ${
+                className={`gm-press flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs font-medium transition-colors disabled:cursor-default ${
                   added
                     ? "border-emerald-500/30 text-emerald-500"
                     : isDark

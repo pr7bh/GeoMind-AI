@@ -11,3 +11,7 @@ pyproj==3.8.0
 
 # HTTP requests (OSRM routing, Overpass discovery)
 httpx==0.28.1
+
+# Research reports (PDF and DOCX, generated in memory)
+reportlab==5.1.0
+python-docx==1.2.0
