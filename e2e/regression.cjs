@@ -18,6 +18,7 @@ const TILE = Buffer.from(
 );
 
 const results = [];
+let currentPage = null;
 function check(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -31,6 +32,11 @@ async function journey(name, fn) {
   } catch (error) {
     results.push({ name, ok: false });
     process.stdout.write(`FAIL ${name} — ${error.message.split("\n")[0]}\n`);
+    if (currentPage) {
+      const shot = require("path").join(require("os").tmpdir(), `geomind-e2e-${results.length}.png`);
+      await currentPage.screenshot({ path: shot }).catch(() => {});
+      process.stdout.write(`     screenshot: ${shot}\n`);
+    }
   }
 }
 
@@ -41,11 +47,17 @@ const setMode = (base, mode) => fetch(`${base}/mode/${mode}`);
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
   const page = await context.newPage();
   page.setDefaultTimeout(TIMEOUT);
+  currentPage = page;
 
   const errors = [];
+  // Set while a journey deliberately simulates a failing endpoint.
+  let expectedFailureUrl = null;
   page.on("pageerror", (error) => errors.push(String(error)));
   page.on("console", (message) => {
-    if (message.type() === "error" && !message.location().url.includes("favicon")) errors.push(message.text());
+    const url = message.location().url;
+    if (message.type() !== "error" || url.includes("favicon")) return;
+    if (expectedFailureUrl && url.includes(expectedFailureUrl)) return;
+    errors.push(message.text());
   });
 
   const tiles = [];
@@ -304,6 +316,191 @@ const setMode = (base, mode) => fetch(`${base}/mode/${mode}`);
     await page.waitForFunction(() => document.documentElement.classList.contains("dark"));
     check((await background()) === "rgb(0, 0, 0)", `dark background ${await background()}`);
     await closePanel("Map Settings");
+  });
+
+  // Milestone 9.1: research planning (plan only, nothing executed).
+  const overpassCount = async () => Number(await (await fetch(`${OVERPASS}/count`)).text());
+  const plan = async (question) => {
+    await page.locator("#research-question").fill(question);
+    await page.getByRole("button", { name: "Plan Research" }).click();
+    return lastTurn();
+  };
+
+  await journey("16. Plan research without executing it", async () => {
+    await sidebar("Ask AI").click();
+    await page.getByRole("button", { name: "Use current map centre" }).click();
+    const before = await overpassCount();
+    const executions = [];
+    const onRequest = (request) => request.url().includes("/api/agent/chat") && executions.push(request.url());
+    page.on("request", onRequest);
+    try {
+      const turn = await plan("Identify areas with poor hospital coverage around this location");
+      await turn.getByText("Research plan created · not executed").waitFor();
+      await turn.getByText("Ready to execute").waitFor();
+      const steps = turn.getByRole("list", { name: "Planned steps" }).locator(":scope > li");
+      check((await steps.count()) === 3, "expected 3 planned steps");
+      check((await steps.nth(0).getAttribute("data-status")) === "ready", "first step should be ready");
+      await steps.nth(1).getByText("after #1").waitFor(); // dependency display
+      await steps.nth(2).getByText("Identify underserved cells").waitFor();
+      check((await turn.getByRole("button", { name: /^Add to map/ }).count()) === 0, "planning produced layers");
+    } finally {
+      page.off("request", onRequest);
+    }
+    check(executions.length === 0, "planning called the execution endpoint");
+    check((await overpassCount()) === before, "planning queried Overpass");
+  });
+
+  await journey("17. Missing input, blocked steps, map selection and re-plan", async () => {
+    const clearB = page.getByRole("button", { name: "Clear area b" });
+    if (await clearB.count()) await clearB.click();
+    const question = "Compare hospital accessibility between two areas, identify underserved locations, and recommend suitable locations for a new hospital";
+    const turn = await plan(question);
+    await turn.getByText("Needs input").waitFor();
+    const missing = turn.getByRole("group", { name: "Missing inputs" });
+    await missing.getByText("Second study area (Area B)").waitFor();
+    check((await turn.locator('li[data-status="blocked"]').count()) >= 1, "no blocked steps shown");
+    check((await turn.getByRole("list", { name: "Planned steps" }).locator(":scope > li").count()) === 8, "expected 8 steps");
+
+    await missing.getByRole("button", { name: "Pick Area B" }).click();
+    await page.mouse.click(600, 300);
+    await page.getByText("Area B set").waitFor();
+    await turn.getByRole("button", { name: "Plan again" }).click();
+    const replanned = lastTurn();
+    await replanned.getByText("Ready to execute").waitFor();
+    check((await replanned.locator('li[data-status="blocked"]').count()) === 0, "steps still blocked after picking Area B");
+  });
+
+  await journey("18. Unsupported request and revising the question", async () => {
+    const turn = await plan("What is the meaning of life?");
+    await turn.getByText("Unsupported", { exact: true }).waitFor();
+    await turn.getByText(/Find hospitals within 5 km/).waitFor();
+    await turn.getByRole("button", { name: "Revise question" }).click();
+    check((await page.locator("#research-question").inputValue()) === "What is the meaning of life?", "question not restored");
+    await page.locator("#research-question").fill("");
+  });
+
+  await journey("19. Planning API failure is shown, not hidden", async () => {
+    expectedFailureUrl = "/api/research/plan";
+    await page.route("**/api/research/plan", (route) =>
+      route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "Planner unavailable" }) }),
+    );
+    try {
+      const turn = await plan("Find hospitals within 5 km");
+      await turn.getByText("Planner unavailable").waitFor();
+      await turn.getByText("Failed", { exact: true }).waitFor();
+    } finally {
+      await page.unroute("**/api/research/plan");
+      expectedFailureUrl = null;
+    }
+    await page.getByRole("button", { name: "Close research panel" }).click();
+  });
+
+  // Milestone 9.2: approved execution of research plans.
+  const executeTurn = async (question) => {
+    const turn = await plan(question);
+    await turn.getByText("Ready to execute").waitFor();
+    return turn;
+  };
+  const stepStatuses = (turn) =>
+    turn.getByRole("list", { name: "Planned steps" }).locator(":scope > li").evaluateAll((items) =>
+      items.map((item) => item.getAttribute("data-execution-status")),
+    );
+
+  await journey("20. Explicit approval, progress and results", async () => {
+    await sidebar("Ask AI").click();
+    await page.getByRole("button", { name: "Use current map centre" }).click();
+    // Earlier journeys leave the suitability settings open; give the conversation room.
+    const settings = page.locator("details", { has: page.locator("summary", { hasText: "Site suitability settings" }) });
+    if (await settings.evaluate((element) => element.open)) await settings.locator("summary").click();
+    const turn = await executeTurn("Identify areas with poor hospital coverage around this location");
+    const before = await overpassCount();
+    check((await overpassCount()) === before, "planning queried Overpass");
+    check((await stepStatuses(turn)).every((s) => s === null), "steps ran before approval");
+
+    await turn.getByRole("button", { name: "Execute Research" }).click();
+    await turn.getByText("Research executed", { exact: true }).waitFor();
+    check(JSON.stringify(await stepStatuses(turn)) === JSON.stringify(["completed", "completed", "completed"]), "steps not completed");
+    await turn.getByText("3 of 3 steps completed").waitFor();
+    await turn.getByText("Plan approved").waitFor();
+    const result = turn.getByRole("group", { name: "Service coverage analysis results" });
+    await result.getByRole("region", { name: "Coverage summary" }).waitFor();
+    check((await overpassCount()) === before + 1, "expected exactly one discovery request");
+    check((await turn.getByRole("button", { name: "Execute Research" }).count()) === 0, "execute offered twice");
+  });
+
+  await journey("21. Add executed results to the map", async () => {
+    const result = lastTurn().getByRole("group", { name: "Service coverage analysis results" });
+    const buttons = result.getByRole("button", { name: /^Add to map/ });
+    const count = await buttons.count();
+    check(count === 2, `expected coverage + services layers, got ${count}`);
+    for (let i = 0; i < count; i++) await buttons.first().click();
+    await result.getByRole("button", { name: /^Added/ }).nth(1).waitFor();
+  });
+
+  await journey("22. Partial results when optional context fails", async () => {
+    await setMode(OVERPASS, "fail_context");
+    try {
+      const turn = await executeTurn("Find suitable locations for a new hospital");
+      await turn.getByRole("button", { name: "Execute Research" }).click();
+      await turn.getByText("Research executed · partial results or warnings").waitFor();
+      await turn.getByText("Partial results", { exact: true }).waitFor();
+      const statuses = await stepStatuses(turn);
+      check(statuses.includes("failed") && statuses.at(-1) === "completed", `statuses ${statuses}`);
+      await turn.getByText("Highest-scoring analytical candidate").first().waitFor();
+    } finally {
+      await setMode(OVERPASS, "normal");
+    }
+  });
+
+  await journey("23. Failed workflow is reported, not fabricated", async () => {
+    await setMode(OVERPASS, "fail_all");
+    try {
+      const turn = await executeTurn("Identify areas with poor hospital coverage around this location");
+      await turn.getByRole("button", { name: "Execute Research" }).click();
+      await turn.getByText("Research execution failed").waitFor();
+      check(JSON.stringify(await stepStatuses(turn)) === JSON.stringify(["failed", "blocked", "blocked"]), "wrong failure states");
+      check((await turn.getByRole("button", { name: /^Add to map/ }).count()) === 0, "failed run offered layers");
+    } finally {
+      await setMode(OVERPASS, "normal");
+    }
+  });
+
+  await journey("24. Multi-workflow execution reuses discovery", async () => {
+    if ((await page.getByText("Area B set").count()) === 0) {
+      await page.getByText("Compare with a second area").click();
+      await page.getByRole("button", { name: "Pick area b on map" }).click();
+      await page.mouse.click(600, 300);
+      await page.getByText("Area B set").waitFor();
+    }
+    const before = await overpassCount();
+    const turn = await executeTurn(
+      "Compare hospital accessibility between two areas, identify underserved locations, and recommend suitable locations for a new hospital",
+    );
+    await turn.getByRole("button", { name: "Execute Research" }).click();
+    await turn.getByText("Research executed", { exact: true }).waitFor();
+    await turn.getByText("Reused result of #1 (no new request)").waitFor();
+    check((await overpassCount()) - before === 3, `expected 3 requests, got ${(await overpassCount()) - before}`);
+    await turn.getByRole("group", { name: "Area comparison results" }).getByRole("region", { name: "Area comparison" }).waitFor();
+    await turn.getByRole("group", { name: "Site suitability (MCDA) results" }).getByText("Highest-scoring analytical candidate").first().waitFor();
+  });
+
+  await journey("25. Cancel research while a request is running", async () => {
+    await setMode(OVERPASS, "slow");
+    try {
+      const turn = await executeTurn("Identify areas with poor hospital coverage around this location");
+      await turn.getByRole("button", { name: "Execute Research" }).click();
+      await turn.locator('li[data-execution-status="running"]').waitFor();
+      await turn.getByRole("button", { name: "Cancel Research" }).click();
+      await turn.getByText("Research cancelled · completed steps kept").waitFor();
+      check((await stepStatuses(turn)).every((s) => s === "cancelled"), "steps not cancelled");
+      check((await turn.getByRole("button", { name: /^Add to map/ }).count()) === 0, "cancelled run offered layers");
+      await page.locator("#research-question").fill("ready?");
+      check(await page.getByRole("button", { name: "Plan Research" }).isEnabled(), "panel stayed busy");
+      await page.locator("#research-question").fill("");
+    } finally {
+      await setMode(OVERPASS, "normal");
+    }
+    await page.getByRole("button", { name: "Close research panel" }).click();
   });
 
   await journey("Phone width has no horizontal scroll", async () => {

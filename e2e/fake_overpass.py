@@ -1,15 +1,18 @@
 """Deterministic fake Overpass API for browser tests.
 
 POST /api/interpreter answers by category around the query centre.
-GET /mode/<name> switches behaviour: normal | fail_context | fail_all.
+GET /mode/<name> switches behaviour: normal | fail_context | fail_all | slow.
+GET /count returns how many queries have been received.
 """
 import json
 import re
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
 MODE = {"value": "normal"}
+CALLS = {"count": 0}
 OFFSETS = {
     "hospital": [(0.01, 0.0), (-0.025, 0.012), (0.0, -0.03)],
     "pharmacy": [(0.012, 0.001), (0.009, -0.001), (-0.021, 0.011)],
@@ -46,14 +49,21 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if self.path.startswith("/mode/"):
-            MODE["value"] = self.path.split("/mode/", 1)[1]
+        if self.path == "/count":
+            body = str(CALLS["count"])
+        else:
+            if self.path.startswith("/mode/"):
+                MODE["value"] = self.path.split("/mode/", 1)[1]
+            body = MODE["value"]
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(MODE["value"].encode())
+        self.wfile.write(body.encode())
 
     def do_POST(self):
+        CALLS["count"] += 1
         body = self.rfile.read(int(self.headers["Content-Length"])).decode()
+        if MODE["value"] == "slow":
+            time.sleep(3)
         elements = respond(parse_qs(body)["data"][0])
         if elements is None:
             self.send_response(503)

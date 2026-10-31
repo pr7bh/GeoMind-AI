@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronRight,
   CircleSlash,
+  ListChecks,
   LoaderCircle,
   MapPlus,
   Route,
@@ -16,7 +17,10 @@ import {
 } from "lucide-react";
 import { isAbortError } from "../../lib/api";
 import { getAgentStatus, streamAgentChat } from "../../lib/agentClient";
+import { cancelExecution, executeResearch, planResearch } from "../../lib/researchClient";
+import type { ExecutionEvent, ResearchPlan } from "../../lib/researchClient";
 import type {
+  AgentLayer,
   AgentResponse,
   AgentStatus,
   AgentStep,
@@ -28,6 +32,9 @@ import type { RouteResult } from "../tools/RoutingTool";
 import type { GeoMapHandle } from "./GeoMap";
 import WorkflowView from "./WorkflowView";
 import SuitabilityConfig from "./SuitabilityConfig";
+import ResearchPlanView from "./ResearchPlanView";
+import ResearchExecutionView from "./ResearchExecutionView";
+import type { ExecutionUIState } from "./ResearchExecutionView";
 import { AREA_COLORS, COVERAGE_PALETTE } from "../../lib/coverage";
 import { SCORE_PALETTE } from "../../lib/suitability";
 import type { SuitabilityOptions } from "../../lib/suitability";
@@ -62,6 +69,8 @@ type TurnStatus = "thinking" | "running" | "completed" | "failed" | "cancelled";
 
 interface Turn {
   id: number;
+  // "plan": research planning only (nothing is executed).
+  kind: "ask" | "plan";
   question: string;
   status: TurnStatus;
   runningTool: string | null;
@@ -69,8 +78,12 @@ interface Turn {
   // Multi-step workflow plan, updated from real step events.
   plan: WorkflowStep[] | null;
   response: AgentResponse | null;
+  researchPlan: ResearchPlan | null;
+  // Present once the user approved and started executing the plan.
+  execution: ExecutionUIState | null;
   error: string | null;
   addedLayers: number[];
+  addedResultLayers: string[];
 }
 
 const EXAMPLES = [
@@ -111,6 +124,7 @@ export default function ResearchPanel({
   const controllerRef = useRef<AbortController | null>(null);
   const nextId = useRef(1);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const busy = turns.some(
     (turn) => turn.status === "thinking" || turn.status === "running",
@@ -175,14 +189,18 @@ export default function ResearchPanel({
       ...current,
       {
         id,
+        kind: "ask",
         question: message,
         status: "thinking",
         runningTool: null,
         steps: [],
         plan: null,
         response: null,
+        researchPlan: null,
+        execution: null,
         error: null,
         addedLayers: [],
+        addedResultLayers: [],
       },
     ]);
     setQuestion("");
@@ -283,6 +301,149 @@ export default function ResearchPanel({
     }
   }
 
+  /** Research planning: returns a validated plan; never runs a step. */
+  async function planQuestion(message: string) {
+    if (!message || busy) return;
+
+    const id = nextId.current++;
+    setTurns((current) => [
+      ...current,
+      {
+        id,
+        kind: "plan",
+        question: message,
+        status: "thinking",
+        runningTool: null,
+        steps: [],
+        plan: null,
+        response: null,
+        researchPlan: null,
+        execution: null,
+        error: null,
+        addedLayers: [],
+        addedResultLayers: [],
+      },
+    ]);
+    setQuestion("");
+
+    const controller = new AbortController();
+    controllerRef.current = controller;
+
+    try {
+      const researchPlan = await planResearch(
+        {
+          question: message,
+          ...(location ? { coordinates: location } : {}),
+          ...(areaB ? { compare_coordinates: areaB } : {}),
+        },
+        controller.signal,
+      );
+      updateTurn(id, () => ({ status: "completed", researchPlan }));
+    } catch (error) {
+      updateTurn(id, () =>
+        isAbortError(error)
+          ? { status: "cancelled" }
+          : {
+              status: "failed",
+              error: error instanceof Error ? error.message : "Unable to create a research plan.",
+            },
+      );
+    } finally {
+      if (controllerRef.current === controller) controllerRef.current = null;
+    }
+  }
+
+  /** Run an approved plan; progress streams into the turn's execution state. */
+  async function executePlan(turnId: number, researchPlan: ResearchPlan) {
+    if (busy) return;
+
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    updateTurn(turnId, () => ({
+      status: "running",
+      runningTool: null,
+      execution: {
+        id: null,
+        status: "queued",
+        steps: {},
+        currentStep: null,
+        warnings: [],
+        errors: [],
+        results: [],
+        error: null,
+      },
+    }));
+
+    try {
+      const summary = await executeResearch(
+        researchPlan,
+        (event) =>
+          updateTurn(turnId, (turn) => {
+            const execution = applyExecutionEvent(turn.execution!, event);
+            const title = researchPlan.steps.find((step) => step.id === execution.currentStep)?.title ?? null;
+            return { execution, runningTool: title };
+          }),
+        controller.signal,
+      );
+      updateTurn(turnId, (turn) => ({
+        status: "completed",
+        runningTool: null,
+        execution: {
+          ...turn.execution!,
+          status: summary.status,
+          currentStep: null,
+          steps: Object.fromEntries(summary.steps.map(({ id, ...step }) => [id, step])),
+          warnings: summary.warnings,
+          errors: summary.errors,
+          results: summary.results,
+        },
+      }));
+    } catch (error) {
+      updateTurn(turnId, (turn) => ({
+        status: "completed",
+        runningTool: null,
+        execution: {
+          ...turn.execution!,
+          currentStep: null,
+          status: isAbortError(error) ? "cancelled" : "failed",
+          error: isAbortError(error)
+            ? "The connection was closed; the server stopped the research."
+            : error instanceof Error
+              ? error.message
+              : "The research could not be executed.",
+        },
+      }));
+    } finally {
+      if (controllerRef.current === controller) controllerRef.current = null;
+    }
+  }
+
+  /** Graceful cancel for research (keeps completed results); abort otherwise. */
+  function cancelActive() {
+    const executing = turns.find(
+      (turn) => turn.execution && (turn.execution.status === "running" || turn.execution.status === "queued"),
+    );
+    const executionId = executing?.execution?.id;
+    if (executionId) {
+      cancelExecution(executionId).catch(() => controllerRef.current?.abort());
+    } else {
+      controllerRef.current?.abort();
+    }
+  }
+
+  function pickLocation() {
+    picker.pickPoint("agent", "location", "Click the map to set the agent's analysis location", setLocation);
+  }
+
+  function pickAreaB() {
+    picker.pickPoint("agent", "compare", "Click the map to set Area B for the comparison", setAreaB);
+  }
+
+  function editQuestion(text: string) {
+    setQuestion(text);
+    textareaRef.current?.focus();
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     void ask(question.trim());
@@ -295,29 +456,44 @@ export default function ResearchPanel({
     }
   }
 
+  /** Add an analysis layer through the shared layer registry. */
+  function addAgentLayer(layer: AgentLayer) {
+    const map = mapRef.current;
+    if (!map) throw new Error("The map is not ready.");
+
+    if (layer.style === "suitability") {
+      map.addClassifiedLayer(layer.geojson, layer.name, "score_band", SCORE_PALETTE);
+    } else if (layer.style === "coverage") {
+      map.addClassifiedLayer(
+        layer.geojson,
+        layer.name,
+        "coverage_class",
+        COVERAGE_PALETTE,
+        layer.area ? AREA_COLORS[layer.area] : undefined,
+      );
+    } else if (layer.kind === "discovery") {
+      map.addDiscoveryLayer(layer.geojson, layer.name);
+    } else {
+      map.addClipResultGeoJSON(JSON.stringify(layer.geojson), layer.name);
+    }
+    onLayersChanged();
+  }
+
+  function addResultLayer(turnId: number, layer: AgentLayer, key: string) {
+    try {
+      addAgentLayer(layer);
+      updateTurn(turnId, (current) => ({ addedResultLayers: [...current.addedResultLayers, key] }));
+    } catch (error) {
+      updateTurn(turnId, () => ({ error: error instanceof Error ? error.message : "Unable to add layer." }));
+    }
+  }
+
   function addLayer(turn: Turn, index: number) {
     const layer = turn.response?.layers[index];
-    const map = mapRef.current;
-
-    if (!layer || !map) return;
+    if (!layer) return;
 
     try {
-      if (layer.style === "suitability") {
-        map.addClassifiedLayer(layer.geojson, layer.name, "score_band", SCORE_PALETTE);
-      } else if (layer.style === "coverage") {
-        map.addClassifiedLayer(
-          layer.geojson,
-          layer.name,
-          "coverage_class",
-          COVERAGE_PALETTE,
-          layer.area ? AREA_COLORS[layer.area] : undefined,
-        );
-      } else if (layer.kind === "discovery") {
-        map.addDiscoveryLayer(layer.geojson, layer.name);
-      } else {
-        map.addClipResultGeoJSON(JSON.stringify(layer.geojson), layer.name);
-      }
-      onLayersChanged();
+      addAgentLayer(layer);
       updateTurn(turn.id, (current) => ({
         addedLayers: [...current.addedLayers, index],
       }));
@@ -404,14 +580,7 @@ export default function ResearchPanel({
           picking={picking}
           markerClass="bg-amber-500"
           emptyText="Pick a point for location questions"
-          onPick={() =>
-            picker.pickPoint(
-              "agent",
-              "location",
-              "Click the map to set the agent's analysis location",
-              setLocation,
-            )
-          }
+          onPick={pickLocation}
           onCancel={() => picker.cancel("agent")}
           onClear={() => {
             setLocation(null);
@@ -451,14 +620,7 @@ export default function ResearchPanel({
               picking={picker.isPicking("agent", "compare")}
               markerClass="bg-violet-500"
               emptyText="Pick the second study centre"
-              onPick={() =>
-                picker.pickPoint(
-                  "agent",
-                  "compare",
-                  "Click the map to set Area B for the comparison",
-                  setAreaB,
-                )
-              }
+              onPick={pickAreaB}
               onCancel={() => picker.cancel("agent")}
               onClear={() => {
                 setAreaB(null);
@@ -547,6 +709,32 @@ export default function ResearchPanel({
                 <p className="mt-2 text-[11px] text-amber-500">
                   Open “Compare with a second area” above and pick Area B.
                 </p>
+              )}
+
+              {turn.researchPlan && (
+                <ResearchPlanView
+                  isDark={isDark}
+                  plan={turn.researchPlan}
+                  busy={busy}
+                  onPickLocation={pickLocation}
+                  onPickCompare={pickAreaB}
+                  onEditQuestion={editQuestion}
+                  onReplan={(text) => void planQuestion(text)}
+                  onExecute={() => turn.researchPlan && void executePlan(turn.id, turn.researchPlan)}
+                  execution={turn.execution}
+                />
+              )}
+
+              {turn.researchPlan && turn.execution && (
+                <ResearchExecutionView
+                  isDark={isDark}
+                  execution={turn.execution}
+                  totalSteps={turn.researchPlan.steps.length}
+                  currentTitle={turn.runningTool}
+                  addedLayers={turn.addedResultLayers}
+                  onAddLayer={(layer, key) => addResultLayer(turn.id, layer, key)}
+                  onCancel={cancelActive}
+                />
               )}
 
               {turn.plan && (
@@ -676,6 +864,7 @@ export default function ResearchPanel({
             Research question
           </label>
           <textarea
+            ref={textareaRef}
             id="research-question"
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
@@ -692,7 +881,7 @@ export default function ResearchPanel({
             {busy ? (
               <button
                 type="button"
-                onClick={() => controllerRef.current?.abort()}
+                onClick={cancelActive}
                 className={`min-h-8 rounded-lg border px-3 text-xs font-medium ${
                   isDark ? "border-white/10 hover:text-red-300" : "border-gray-200 hover:text-red-600"
                 }`}
@@ -700,13 +889,28 @@ export default function ResearchPanel({
                 Cancel
               </button>
             ) : (
-              <button
-                type="submit"
-                disabled={!question.trim()}
-                className="flex min-h-8 items-center gap-1.5 rounded-lg bg-emerald-500 px-3 text-xs font-semibold text-black transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Ask <ChevronRight size={14} />
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => void planQuestion(question.trim())}
+                  disabled={!question.trim()}
+                  title="Create a research plan without running anything"
+                  className={`flex min-h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                    isDark
+                      ? "border-emerald-400/30 text-emerald-400 hover:bg-emerald-400/10"
+                      : "border-emerald-500/40 text-emerald-700 hover:bg-emerald-50"
+                  }`}
+                >
+                  <ListChecks size={14} /> Plan Research
+                </button>
+                <button
+                  type="submit"
+                  disabled={!question.trim()}
+                  className="flex min-h-8 items-center gap-1.5 rounded-lg bg-emerald-500 px-3 text-xs font-semibold text-black transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Ask <ChevronRight size={14} />
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -730,7 +934,8 @@ function TurnStatusLine({ turn }: { turn: Turn }) {
     case "thinking":
       return (
         <p className={`${base} text-amber-500`} role="status">
-          <LoaderCircle size={13} className="animate-spin" /> Thinking…
+          <LoaderCircle size={13} className="animate-spin" />{" "}
+          {turn.kind === "plan" ? "Planning research…" : "Thinking…"}
         </p>
       );
     case "running":
@@ -741,6 +946,32 @@ function TurnStatusLine({ turn }: { turn: Turn }) {
         </p>
       );
     case "completed": {
+      if (turn.kind === "plan" && turn.execution) {
+        const failed = turn.execution.status === "failed";
+        const cancelled = turn.execution.status === "cancelled";
+        const clean = turn.execution.status === "completed";
+        return (
+          <p className={`${base} ${failed ? "text-red-400" : cancelled ? "text-neutral-500" : clean ? "text-emerald-500" : "text-amber-500"}`}>
+            {failed ? <AlertCircle size={13} /> : cancelled ? <CircleSlash size={13} /> : <CheckCircle2 size={13} />}
+            {failed
+              ? "Research execution failed"
+              : cancelled
+                ? "Research cancelled · completed steps kept"
+                : clean
+                  ? "Research executed"
+                  : "Research executed · partial results or warnings"}
+          </p>
+        );
+      }
+
+      if (turn.kind === "plan") {
+        return (
+          <p className={`${base} text-emerald-500`}>
+            <ListChecks size={13} /> Research plan created · not executed
+          </p>
+        );
+      }
+
       if (turn.response?.workflow?.outcome === "partial") {
         return (
           <p className={`${base} text-amber-500`}>
@@ -787,4 +1018,43 @@ function TurnStatusLine({ turn }: { turn: Turn }) {
         </p>
       );
   }
+}
+
+function applyExecutionEvent(state: ExecutionUIState, event: ExecutionEvent): ExecutionUIState {
+  const next: ExecutionUIState = { ...state, id: event.execution_id, steps: { ...state.steps } };
+  const patch = (stepId: string, change: Partial<ExecutionUIState["steps"][string]>) => {
+    const current = next.steps[stepId] ?? { status: "pending", summary: "", error: null, reused_from: null };
+    next.steps[stepId] = { ...current, ...change };
+  };
+
+  switch (event.type) {
+    case "execution_started":
+      next.status = "running";
+      event.steps.forEach(({ id, ...step }) => patch(id, step));
+      break;
+    case "step_started":
+      next.currentStep = event.step_id;
+      patch(event.step_id, { status: "running" });
+      break;
+    case "step_completed":
+    case "step_partial":
+      patch(event.step_id, {
+        status: event.type === "step_partial" ? "partial" : "completed",
+        summary: event.summary,
+        reused_from: event.reused_from,
+      });
+      if (event.warning) next.warnings = [...next.warnings, event.warning];
+      break;
+    case "step_failed":
+      patch(event.step_id, { status: "failed", error: event.error });
+      break;
+    case "step_blocked":
+    case "step_skipped":
+      patch(event.step_id, { status: event.type === "step_blocked" ? "blocked" : "skipped", error: event.reason });
+      break;
+    default:
+      next.status = event.status;
+      next.currentStep = null;
+  }
+  return next;
 }

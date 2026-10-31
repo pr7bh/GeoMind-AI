@@ -797,3 +797,66 @@ def serialize_suitability(run: WorkflowRun) -> tuple[dict[str, Any], list[dict[s
         "analysis": analysis,
     }
     return workflow, layers
+
+
+# Research capabilities: what the research planner may propose. Ids are the
+# real identifiers used elsewhere: agent tool names (app.services.agent.tools)
+# for single operations and workflow "type" values for multi-step workflows.
+
+@dataclass(frozen=True)
+class Capability:
+    id: str
+    kind: str  # "tool" | "workflow"
+    title: str
+    summary: str
+    # User-supplied inputs: "location", "compare_location", "category", "facility".
+    inputs: tuple[str, ...]
+
+
+CAPABILITIES: dict[str, Capability] = {
+    capability.id: capability
+    for capability in (
+        Capability(
+            "discover_features", "tool", "Feature discovery",
+            "Find mapped OpenStreetMap features of one category within a radius of the study location.",
+            ("location", "category"),
+        ),
+        Capability(
+            "find_nearest_features", "tool", "Nearest features",
+            "Rank discovered features by geodesic distance from the study location.",
+            ("location", "category"),
+        ),
+        Capability(
+            "create_buffer", "tool", "Buffer analysis",
+            "Create a circular buffer of a given distance around the study location.",
+            ("location",),
+        ),
+        Capability(
+            "spatial_query", "tool", "Spatial query",
+            "Keep discovered features that lie within or intersect the buffer.",
+            ("location", "category"),
+        ),
+        Capability(
+            "nearby_count", "workflow", "Nearby-count ranking",
+            "Rank features of one category (e.g. hospitals) by how many features of another "
+            "category (e.g. pharmacies) lie near each.",
+            ("location", "category"),
+        ),
+        Capability(
+            "coverage", "workflow", "Service coverage analysis",
+            "Grid the study area and classify cells as well covered, moderate or underserved "
+            "by distance to the nearest mapped service.",
+            ("location", "category"),
+        ),
+        Capability(
+            "comparison", "workflow", "Area comparison",
+            "Run identical coverage analyses for two study areas and compare them metric by metric.",
+            ("location", "compare_location", "category"),
+        ),
+        Capability(
+            "suitability", "workflow", "Site suitability (MCDA)",
+            "Score analytical candidate points for a new facility on weighted criteria.",
+            ("location", "facility"),
+        ),
+    )
+}

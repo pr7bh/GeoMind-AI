@@ -21,6 +21,8 @@ interface WorkflowViewProps {
   plan: WorkflowStep[];
   result: WorkflowResult | null;
   cancelled: boolean;
+  /** False when the steps are already shown elsewhere (research execution). */
+  showTimeline?: boolean;
 }
 
 const MAX_RANKED_ROWS = 10;
@@ -46,7 +48,7 @@ function previewRows(preview: Record<string, unknown>) {
     .map(([key, value]) => [key.replace(/_/g, " "), String(value)] as const);
 }
 
-export default function WorkflowView({ isDark, plan, result, cancelled }: WorkflowViewProps) {
+export default function WorkflowView({ isDark, plan, result, cancelled, showTimeline = true }: WorkflowViewProps) {
   const muted = isDark ? "text-neutral-400" : "text-gray-500";
   const border = isDark ? "border-white/8" : "border-gray-200";
   const analysis = result?.analysis;
@@ -57,46 +59,48 @@ export default function WorkflowView({ isDark, plan, result, cancelled }: Workfl
   return (
     <div className="mt-3 space-y-3">
       {/* Timeline */}
-      <ol aria-label="Workflow steps" className="space-y-1">
-        {plan.map((step, index) => (
-          <li key={step.id}>
-            <details className="group">
-              <summary
-                className={`flex cursor-pointer list-none items-start gap-2 rounded-lg border px-2.5 py-2 text-[11px] [&::-webkit-details-marker]:hidden ${border} ${
-                  step.status === "running" ? "border-sky-500/40" : ""
-                }`}
-              >
-                <StepIcon status={cancelled && step.status === "running" ? "skipped" : step.status} />
-                <span className="min-w-0 flex-1">
-                  <span className="font-medium">
-                    {index + 1}. {step.description}
-                  </span>
-                  {step.summary && <span className={`block ${muted}`}>{step.summary}</span>}
-                  {step.error && (
-                    <span className={`block ${step.status === "failed" ? "text-red-400" : muted}`}>
-                      {step.error}
+      {showTimeline && (
+        <ol aria-label="Workflow steps" className="space-y-1">
+          {plan.map((step, index) => (
+            <li key={step.id}>
+              <details className="group">
+                <summary
+                  className={`flex cursor-pointer list-none items-start gap-2 rounded-lg border px-2.5 py-2 text-[11px] [&::-webkit-details-marker]:hidden ${border} ${
+                    step.status === "running" ? "border-sky-500/40" : ""
+                  }`}
+                >
+                  <StepIcon status={cancelled && step.status === "running" ? "skipped" : step.status} />
+                  <span className="min-w-0 flex-1">
+                    <span className="font-medium">
+                      {index + 1}. {step.description}
                     </span>
-                  )}
-                  {step.partial && <span className="block text-amber-500">Partial result</span>}
-                </span>
-                <ChevronRight size={12} className={`mt-0.5 shrink-0 transition-transform group-open:rotate-90 ${muted}`} />
-              </summary>
-              <dl className={`ml-6 mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[10px] ${muted}`}>
-                <dt>tool</dt>
-                <dd className="font-mono">{step.tool}</dd>
-                <dt>status</dt>
-                <dd>{step.status}</dd>
-                {previewRows(step.preview).map(([key, value]) => (
-                  <div key={key} className="contents">
-                    <dt>{key}</dt>
-                    <dd>{value}</dd>
-                  </div>
-                ))}
-              </dl>
-            </details>
-          </li>
-        ))}
-      </ol>
+                    {step.summary && <span className={`block ${muted}`}>{step.summary}</span>}
+                    {step.error && (
+                      <span className={`block ${step.status === "failed" ? "text-red-400" : muted}`}>
+                        {step.error}
+                      </span>
+                    )}
+                    {step.partial && <span className="block text-amber-500">Partial result</span>}
+                  </span>
+                  <ChevronRight size={12} className={`mt-0.5 shrink-0 transition-transform group-open:rotate-90 ${muted}`} />
+                </summary>
+                <dl className={`ml-6 mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[10px] ${muted}`}>
+                  <dt>tool</dt>
+                  <dd className="font-mono">{step.tool}</dd>
+                  <dt>status</dt>
+                  <dd>{step.status}</dd>
+                  {previewRows(step.preview).map(([key, value]) => (
+                    <div key={key} className="contents">
+                      <dt>{key}</dt>
+                      <dd>{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </details>
+            </li>
+          ))}
+        </ol>
+      )}
 
       {/* Outcome */}
       {result?.outcome === "partial" && (

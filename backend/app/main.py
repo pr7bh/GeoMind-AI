@@ -8,6 +8,7 @@ from app.routers.analysis import router as analysis_router
 from app.routers.routing import router as routing_router
 from app.routers.agent import router as agent_router
 from app.routers.discovery import router as discovery_router
+from app.routers.research import router as research_router
 
 app = FastAPI(
     title="GeoMind AI API",
@@ -51,3 +52,4 @@ app.include_router(analysis_router)
 app.include_router(routing_router)
 app.include_router(agent_router)
 app.include_router(discovery_router)
+app.include_router(research_router)
