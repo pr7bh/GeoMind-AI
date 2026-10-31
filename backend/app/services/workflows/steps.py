@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.services import comparison, coverage, osm_discovery
+from app.services import comparison, coverage, osm_discovery, suitability
 from app.services.workflows import analysis
 from app.services.workflows.plan import (
     StepError,
@@ -763,6 +763,132 @@ async def _report_comparison(args: ComparisonReportArgs, _context: WorkflowConte
     return StepOutcome(summary="Findings written", result={"text": text, "caveats": caveats}, preview={"caveats": len(caveats)})
 
 
+# Site suitability (MCDA)
+
+class SuitabilityStepArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    existing_step: str = Field(..., min_length=1, max_length=32)
+    # Density/pharmacy search; None when the facility's own search is reused.
+    context_step: str | None = Field(None, min_length=1, max_length=32)
+    facility: Literal["hospital", "school", "pharmacy", "police", "fire_station"]
+    radius_km: float = Field(..., gt=0, le=coverage.MAX_STUDY_RADIUS_KM)
+    weights: dict[str, float] = Field(..., min_length=1, max_length=10)
+    pharmacy_direction: Literal["closer", "farther"] | None = None
+    existing_saturation_m: float = Field(
+        suitability.DEFAULT_EXISTING_SATURATION_M,
+        ge=suitability.MIN_EXISTING_SATURATION_M,
+        le=suitability.DEFAULT_EXISTING_SATURATION_M,
+    )
+    normalization: Literal["saturating", "minmax"] = "saturating"
+    max_candidates: int = Field(suitability.MAX_CANDIDATES, ge=suitability.MIN_CANDIDATES, le=suitability.MAX_CANDIDATES)
+
+
+async def _score_suitability(args: SuitabilityStepArgs, context: WorkflowContext, inputs) -> StepOutcome:
+    if context.location is None:
+        raise StepError("No map location is selected.")
+
+    existing = inputs[args.existing_step].outcome.result
+    context_result, context_error = None, None
+    if args.context_step:
+        state = inputs[args.context_step]
+        if state.status == "completed":
+            context_result = state.outcome.result
+        else:
+            context_error = f"The context search failed: {state.error or 'it did not run.'}"
+
+    try:
+        # CPU-bound but bounded (<= 100 candidates, <= 500 cells and features).
+        result = await asyncio.to_thread(
+            suitability.analyse,
+            context.location,
+            args.facility,
+            args.radius_km,
+            existing,
+            context_result,
+            args.weights,
+            args.pharmacy_direction,
+            args.existing_saturation_m,
+            args.normalization,
+            args.max_candidates,
+            context_error,
+        )
+    except (suitability.SuitabilityError, coverage.CoverageError) as exc:
+        raise StepError(str(exc)) from exc
+
+    top = result["ranked"][0] if result["ranked"] else None
+    return StepOutcome(
+        summary=(
+            f"Scored {result['scored_count']} of {result['candidate_count']} candidates"
+            + (f"; highest {top['score']:g}/100 ({top['id']})" if top else "")
+            + (f"; {result['unscored_count']} unscored" if result["unscored_count"] else "")
+        ),
+        result=result,
+        preview={
+            "candidates": result["candidate_count"],
+            "scored": result["scored_count"],
+            "unscored": result["unscored_count"],
+            "top_score": top["score"] if top else None,
+            "criteria_used": sum(1 for c in result["criteria"] if c["status"] == "used"),
+        },
+        partial=not result["complete"],
+    )
+
+
+class SuitabilityReportArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    suitability_step: str = Field(..., min_length=1, max_length=32)
+    unsupported: list[Literal[tuple(suitability.UNSUPPORTED_CRITERIA)]] = Field(default_factory=list, max_length=10)
+
+
+MAX_REPORTED_CANDIDATES = 3
+
+
+async def _report_suitability(args: SuitabilityReportArgs, _context: WorkflowContext, inputs) -> StepOutcome:
+    result = inputs[args.suitability_step].outcome.result
+    label = result["facility_label"].lower()
+    lat, lon = result["centre"][1], result["centre"][0]
+    used = [c for c in result["criteria"] if c["status"] == "used"]
+
+    lines = [
+        f"Site suitability for a new {label} within {result['radius_km']:g} km of ({lat:.5f}, {lon:.5f}): "
+        f"{result['candidate_count']} analytical candidate points on a {result['cell_size_m']} m grid, "
+        f"scored 0–100 on " + ", ".join(f"{c['name'].lower()} ({c['weight'] * 100:.0f}%)" for c in used) + ".",
+    ]
+    ranked = result["ranked"]
+    if ranked:
+        top = ranked[0]
+        lines.append(
+            f"Highest-scoring analytical candidate: {top['id']} at ({top['lat']:.5f}, {top['lon']:.5f}), "
+            f"score {top['score']:g}/100" + (" (tied)" if top["tied"] else "") + "."
+        )
+        for entry in ranked[1:MAX_REPORTED_CANDIDATES]:
+            lines.append(f"- #{entry['rank']} {entry['id']}: {entry['score']:g}/100")
+        if top["strengths"]:
+            lines.append("Why it ranks highly: " + "; ".join(top["strengths"]) + ".")
+        if result["top_comparison"]:
+            lines.append(result["top_comparison"]["text"])
+    if result["unscored_count"]:
+        lines.append(f"{result['unscored_count']} candidates could not be scored because data was missing; they are listed separately.")
+
+    caveats = [
+        "Candidates are analytical grid points, not available land parcels; check land, zoning and access separately.",
+        "All distances are straight-line to mapped OpenStreetMap features; not travel time or service capacity.",
+    ]
+    caveats += result["data_quality"]
+    note = suitability.unsupported_note(args.unsupported)
+    if note:
+        caveats.append(note)
+
+    text = "\n".join(lines) + "\n\nCaveats:\n" + "\n".join(f"- {c}" for c in caveats)
+    return StepOutcome(
+        summary="Findings written",
+        result={"text": text, "caveats": caveats},
+        preview={"caveats": len(caveats)},
+    )
+
+
 WORKFLOW_TOOLS: dict[str, WorkflowTool] = {
     tool.name: tool
     for tool in (
@@ -813,6 +939,21 @@ WORKFLOW_TOOLS: dict[str, WorkflowTool] = {
             ComparisonReportArgs,
             _report_comparison,
             step_refs=(("comparison_step", frozenset({"compare_areas"})),),
+        ),
+        WorkflowTool(
+            "score_suitability",
+            SuitabilityStepArgs,
+            _score_suitability,
+            step_refs=(
+                ("existing_step", frozenset({"discover_services"})),
+                ("context_step", frozenset({"discover_services"})),
+            ),
+        ),
+        WorkflowTool(
+            "report_suitability",
+            SuitabilityReportArgs,
+            _report_suitability,
+            step_refs=(("suitability_step", frozenset({"score_suitability"})),),
         ),
     )
 }

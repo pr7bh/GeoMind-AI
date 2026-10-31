@@ -14,6 +14,7 @@ import type {
   WorkflowStep,
 } from "../../lib/agentClient";
 import { AREA_COLORS, COVERAGE_CLASSES } from "../../lib/coverage";
+import SuitabilityView from "./SuitabilityView";
 
 interface WorkflowViewProps {
   isDark: boolean;
@@ -118,6 +119,10 @@ export default function WorkflowView({ isDark, plan, result, cancelled }: Workfl
 
       {result?.type === "comparison" && analysis?.areas && (
         <ComparisonView isDark={isDark} result={result} />
+      )}
+
+      {result?.type === "suitability" && analysis?.suitability && (
+        <SuitabilityView isDark={isDark} result={result} />
       )}
 
       {result?.type === "coverage" && analysis?.coverage && (

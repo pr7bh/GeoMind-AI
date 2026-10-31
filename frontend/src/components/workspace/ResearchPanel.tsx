@@ -27,7 +27,10 @@ import type { MapPicker } from "../map/useMapPicker";
 import type { RouteResult } from "../tools/RoutingTool";
 import type { GeoMapHandle } from "./GeoMap";
 import WorkflowView from "./WorkflowView";
+import SuitabilityConfig from "./SuitabilityConfig";
 import { AREA_COLORS, COVERAGE_PALETTE } from "../../lib/coverage";
+import { SCORE_PALETTE } from "../../lib/suitability";
+import type { SuitabilityOptions } from "../../lib/suitability";
 
 interface NearestFeaturesInput {
   coordinates: [number, number];
@@ -75,6 +78,7 @@ const EXAMPLES = [
   "Find hospitals within 5 km and identify which hospitals have the most pharmacies within 1 km",
   "Identify areas within 5 km that are underserved by hospitals",
   "Compare hospital coverage in these two areas",
+  "Find suitable locations for a new hospital",
   "Find schools within 2 km",
   "Which parks are within 1 km, and which is nearest?",
 ];
@@ -163,7 +167,7 @@ export default function ResearchPanel({
     }
   }
 
-  async function ask(message: string) {
+  async function ask(message: string, suitability?: SuitabilityOptions) {
     if (!message || busy) return;
 
     const id = nextId.current++;
@@ -196,6 +200,7 @@ export default function ResearchPanel({
     if (location) payload.coordinates = location;
     else if (nearestInput) payload.coordinates = nearestInput.coordinates;
     if (areaB) payload.compare_coordinates = areaB;
+    if (suitability) payload.suitability = suitability;
     if (nearestInput) {
       payload.features = nearestInput.features;
       payload.limit = 5;
@@ -297,7 +302,9 @@ export default function ResearchPanel({
     if (!layer || !map) return;
 
     try {
-      if (layer.style === "coverage") {
+      if (layer.style === "suitability") {
+        map.addClassifiedLayer(layer.geojson, layer.name, "score_band", SCORE_PALETTE);
+      } else if (layer.style === "coverage") {
         map.addClassifiedLayer(
           layer.geojson,
           layer.name,
@@ -460,6 +467,12 @@ export default function ResearchPanel({
             />
           </div>
         </details>
+        <SuitabilityConfig
+          isDark={isDark}
+          disabled={busy}
+          hasLocation={location !== null}
+          onRun={(message, options) => void ask(message, options)}
+        />
       </div>
 
       {/* Conversation */}
@@ -523,6 +536,11 @@ export default function ResearchPanel({
               {turn.response?.needs_input.includes("coordinates") && (
                 <p className="mt-2 text-[11px] text-amber-500">
                   Use “Analysis location” above, then ask again.
+                </p>
+              )}
+              {turn.response?.needs_input.includes("facility") && (
+                <p className="mt-2 text-[11px] text-amber-500">
+                  Or open “Site suitability settings” above and choose a facility.
                 </p>
               )}
               {turn.response?.needs_input.includes("compare_coordinates") && (

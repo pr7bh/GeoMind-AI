@@ -1,6 +1,7 @@
 import type { FeatureCollection } from "geojson";
 import { API_BASE_URL, getJSON } from "./api";
 import type { CoverageClass } from "./coverage";
+import type { SuitabilityResult, SuitabilitySource } from "./suitability";
 
 export interface AgentStep {
   tool: string;
@@ -12,8 +13,8 @@ export interface AgentStep {
 
 export interface AgentLayer {
   kind: "discovery" | "analysis";
-  /** "coverage": colour cells by their coverage_class property. */
-  style?: "coverage";
+  /** "coverage": colour by coverage_class; "suitability": colour by score_band. */
+  style?: "coverage" | "suitability";
   /** Comparison area this layer belongs to. */
   area?: "a" | "b";
   name: string;
@@ -96,7 +97,7 @@ export interface AreaMetrics {
 }
 
 export interface WorkflowResult {
-  type?: "nearby_count" | "coverage" | "comparison";
+  type?: "nearby_count" | "coverage" | "comparison" | "suitability";
   outcome: "completed" | "partial" | "failed";
   stop_reason: string | null;
   plan: WorkflowStep[];
@@ -122,6 +123,9 @@ export interface WorkflowResult {
     metrics?: ComparisonMetric[];
     overall_winner?: null;
     areas?: Record<"a" | "b", { metrics: AreaMetrics | null; error: string | null }>;
+    suitability?: SuitabilityResult;
+    data_sources?: { existing?: SuitabilitySource; context?: SuitabilitySource };
+    caveats?: string[];
   };
 }
 

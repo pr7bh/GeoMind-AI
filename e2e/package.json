@@ -1,0 +1,11 @@
+{
+  "name": "geomind-e2e",
+  "private": true,
+  "description": "Browser regression suite (dev only; not deployed).",
+  "scripts": {
+    "test": "./run.sh"
+  },
+  "devDependencies": {
+    "playwright-core": "1.48.2"
+  }
+}

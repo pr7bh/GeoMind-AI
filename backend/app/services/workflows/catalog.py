@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from app.services import coverage, osm_discovery
+from app.services import coverage, osm_discovery, suitability
 from app.services.workflows.plan import (
     Emit,
     WorkflowContext,
@@ -21,6 +21,7 @@ from app.services.workflows.plan import (
 )
 from app.services.workflows.steps import (
     COVERAGE_CATEGORIES,
+    MAX_MODERATE_M,
     MAX_SERVICES,
     MAX_SOURCES,
     WORKFLOW_TOOLS,
@@ -545,6 +546,251 @@ def serialize_comparison(run: WorkflowRun) -> tuple[dict[str, Any], list[dict[st
 
     workflow = {
         "type": "comparison",
+        "outcome": run.outcome,
+        "stop_reason": run.stop_reason,
+        "plan": [state.public() for state in run.steps],
+        "analysis": analysis,
+    }
+    return workflow, layers
+
+
+# Site suitability (MCDA)
+
+_SUITABILITY_INTENT = re.compile(
+    r"\b(suitab\w*|site\s+selection|(?:best|optimal|ideal)\s+(?:[a-z]+\s+){0,2}?(?:locations?|sites?|places?|spots?|areas?)|"
+    r"candidate\s+(?:locations?|sites?)|"
+    r"where\s+(?:should|could|can|would|do)\s+(?:i|we)\s+(?:build|establish|open|locate|place|put|site|set\s+up)|"
+    r"rank\s+(?:the\s+)?(?:best\s+|possible\s+|candidate\s+)?(?:locations?|sites?|areas?|places?))\b",
+    re.IGNORECASE,
+)
+_LOW_DENSITY = re.compile(
+    r"\b(?:low|lowest|least|sparse|fewest)\b[^.?!]{0,40}\bdensity\b",
+    re.IGNORECASE,
+)
+_FACILITY_TERMS = [
+    (r"fire\s+stations?|fire\s+services?|fire\s+brigades?", "fire_station"),
+    (r"police(?:\s+stations?)?", "police"),
+    (r"pharmac(?:y|ies)|chemists?|drug\s?stores?", "pharmacy"),
+    (r"hospitals?", "hospital"),
+    (r"schools?", "school"),
+]
+# Low-density questions name the density category, not the facility.
+_DENSITY_TERMS = [
+    (r"health\s?care|health|medical", "hospital"),
+    (r"education(?:al)?", "school"),
+]
+_UNSUPPORTED_TERMS = {
+    "population": r"\b(?:population|populous|people|residents|inhabitants|demographic\w*)\b",
+    "land": r"\b(?:land|vacant|parcels?|plots?)\b",
+    "zoning": r"\bzon(?:e|es|ing)\b",
+    "cost": r"\b(?:cost\w*|price\w*|budget|afford\w*|cheap\w*|expensive|rent)\b",
+    "travel_time": r"\b(?:travel\s+times?|drive\s+times?|driving\s+times?|minutes?\s+(?:drive|away)|isochrones?)\b",
+    "traffic": r"\b(?:traffic|congest\w*)\b",
+    "demand": r"\b(?:demand|footfall|utili[sz]ation)\b",
+}
+
+
+@dataclass(frozen=True)
+class SuitabilityRequest:
+    # None when the question names no supported facility.
+    facility: str | None
+    radius_km: float
+    low_density: bool = False
+    unsupported: tuple[str, ...] = ()
+
+
+def _find(patterns: list[tuple[str, str]], text: str) -> str | None:
+    return next((value for pattern, value in patterns if re.search(rf"\b(?:{pattern})\b", text)), None)
+
+
+def unsupported_criteria(message: str) -> list[str]:
+    return [key for key, pattern in _UNSUPPORTED_TERMS.items() if re.search(pattern, message, re.IGNORECASE)]
+
+
+def match_suitability(message: str) -> SuitabilityRequest | None:
+    low_density = bool(_LOW_DENSITY.search(message))
+    if not low_density and not _SUITABILITY_INTENT.search(message):
+        return None
+
+    text = message.lower()
+    facility = _find(_FACILITY_TERMS, text)
+    if facility is None and low_density:
+        facility = _find(_DENSITY_TERMS, text)
+
+    radius = _COVERAGE_RADIUS.search(message)
+    radius_km = _km(radius[1], radius[2]) if radius else coverage.DEFAULT_STUDY_RADIUS_KM
+    return SuitabilityRequest(
+        facility=facility,
+        radius_km=radius_km,
+        low_density=low_density,
+        unsupported=tuple(unsupported_criteria(message)),
+    )
+
+
+@dataclass(frozen=True)
+class SuitabilitySettings:
+    weights: dict[str, float]
+    pharmacy_direction: str | None = None
+    existing_saturation_m: float = suitability.DEFAULT_EXISTING_SATURATION_M
+    normalization: str = "saturating"
+    max_candidates: int = suitability.MAX_CANDIDATES
+
+
+def build_suitability_plan(request: SuitabilityRequest, settings: SuitabilitySettings) -> list[dict[str, Any]]:
+    facility = suitability.FACILITIES[request.facility]
+    label = facility.label.lower()
+    step_max = coverage.MAX_STUDY_RADIUS_KM + MAX_MODERATE_M / 1000
+    existing_km = suitability.clamp_search_radius(
+        request.radius_km, suitability.EXISTING_MARGIN_KM,
+        osm_discovery.OSM_CATEGORIES[facility.existing]["max_radius_km"], step_max,
+    )
+    # A separate context search only when density counts another category
+    # and an enabled criterion needs it.
+    needs_context = facility.density != facility.existing and any(
+        settings.weights.get(c, 0) > 0 for c in (suitability.DENSITY, suitability.PHARMACY)
+    )
+
+    plan: list[dict[str, Any]] = [{
+        "id": "find_existing",
+        "tool": "discover_services",
+        "description": f"Find existing {label}s within {existing_km:g} km (study area plus margin)",
+        "arguments": {"category": facility.existing, "radius_km": existing_km, "limit": MAX_SERVICES},
+    }]
+    if needs_context:
+        context_km = suitability.clamp_search_radius(
+            request.radius_km, suitability.CONTEXT_MARGIN_KM,
+            osm_discovery.OSM_CATEGORIES[facility.density]["max_radius_km"], step_max,
+        )
+        plan.append({
+            # Sequential after the first search (never two Overpass requests
+            # at once); its failure only removes the criteria that need it.
+            "id": "find_context",
+            "tool": "discover_services",
+            "description": f"Find {facility.density_label} within {context_km:g} km for density",
+            "arguments": {"category": facility.density, "radius_km": context_km, "limit": MAX_SERVICES},
+            "optional_depends_on": ["find_existing"],
+        })
+
+    plan += [
+        {
+            "id": "score",
+            "tool": "score_suitability",
+            "description": f"Score up to {settings.max_candidates} candidate points within {request.radius_km:g} km",
+            "arguments": {
+                "existing_step": "find_existing",
+                "context_step": "find_context" if needs_context else None,
+                "facility": request.facility,
+                "radius_km": request.radius_km,
+                "weights": settings.weights,
+                "pharmacy_direction": settings.pharmacy_direction,
+                "existing_saturation_m": settings.existing_saturation_m,
+                "normalization": settings.normalization,
+                "max_candidates": settings.max_candidates,
+            },
+            "depends_on": ["find_existing"],
+            "optional_depends_on": ["find_context"] if needs_context else [],
+        },
+        {
+            "id": "report",
+            "tool": "report_suitability",
+            "description": "Summarise the ranking, reasons and caveats",
+            "arguments": {"suitability_step": "score", "unsupported": list(request.unsupported)},
+            "depends_on": ["score"],
+        },
+    ]
+    return plan
+
+
+async def run_suitability_workflow(
+    request: SuitabilityRequest,
+    settings: SuitabilitySettings,
+    location: tuple[float, float],
+    timeout_seconds: float,
+    emit: Emit,
+) -> WorkflowRun:
+    """Validate the plan (raises PlanError) and execute it within the time limit."""
+    states = validate_plan(build_suitability_plan(request, settings), WORKFLOW_TOOLS)
+    context = WorkflowContext(
+        location=location,
+        deadline=asyncio.get_running_loop().time() + timeout_seconds,
+    )
+    return await execute_plan(states, WORKFLOW_TOOLS, context, emit)
+
+
+SUITABILITY_METHODOLOGY = [
+    "Candidates are analytical points: centroids of a regular grid (at most 100 cells) clipped to the study "
+    "circle, with stable ids. Edge cells under a quarter of a full cell are dropped. They are not land parcels.",
+    "Inside the study area is a hard constraint: candidates outside the circle are excluded, not scored.",
+    "Each criterion is measured as a straight-line distance or count in a local azimuthal equidistant "
+    "projection, using a spatial index over mapped OpenStreetMap features.",
+    "Nearby service gap reuses the service coverage analysis (well covered ≤ 2 km, moderate ≤ 5 km, "
+    "underserved beyond) and averages it over grid cells within 2 km of each candidate.",
+    "Searches extend past the study edge (5 km for existing facilities, 2 km for density) so edge "
+    "candidates see nearby features. Distances beyond the search are lower bounds (marked +).",
+    "Normalisation to 0–100 (100 = most suitable): saturating (value ÷ saturation, clamped) or min–max across "
+    "candidates; identical values score 50 under min–max.",
+    "Weights are non-negative and rescaled to sum to 1. Final score = Σ (criterion score × weight).",
+    "A criterion with no data is removed and the remaining weights rescaled (reported); a candidate missing "
+    "a value is listed as unscored, never given zero.",
+    "Ties share a rank; order within a tie is by candidate id. Distance and service gap are related "
+    "measures, so together they emphasise distance from existing facilities.",
+]
+
+
+def serialize_suitability(run: WorkflowRun) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    found = run.step("find_existing")
+    context = run.step("find_context")
+    scored = run.step("score")
+    report = run.step("report")
+    analysis: dict[str, Any] = {"methodology": SUITABILITY_METHODOLOGY}
+    layers: list[dict[str, Any]] = []
+
+    keys = ("category", "label", "search_radius_km", "total_found", "returned", "truncated", "attribution", "osm_base", "coverage_note")
+    sources: dict[str, Any] = {}
+    for role, state in (("existing", found), ("context", context)):
+        if state is None:
+            continue
+        if state.status == "completed":
+            sources[role] = {k: state.outcome.result[k] for k in keys}
+        else:
+            sources[role] = {"error": state.error or "The search did not run."}
+    analysis["data_sources"] = sources
+    if report and report.status == "completed":
+        analysis["caveats"] = report.outcome.result["caveats"]
+
+    if scored and scored.status == "completed":
+        result = scored.outcome.result
+        analysis["suitability"] = {k: v for k, v in result.items() if not k.startswith("_")}
+        cells, points = suitability.layers(result)
+        name = f"{result['facility_label']} suitability · {result['radius_km']:g} km"
+        layers += [
+            {
+                "kind": "analysis",
+                "style": "suitability",
+                "name": f"{name} · candidate cells",
+                "feature_count": len(cells),
+                "geojson": {"type": "FeatureCollection", "features": cells},
+            },
+            {
+                "kind": "analysis",
+                "style": "suitability",
+                "name": f"{name} · candidate points",
+                "feature_count": len(points),
+                "geojson": {"type": "FeatureCollection", "features": points},
+            },
+        ]
+
+    if found and found.status == "completed" and found.outcome.result["features"]:
+        existing = found.outcome.result
+        layers.append({
+            "kind": "discovery",
+            "name": f"Existing {existing['label'].lower()} · {existing['search_radius_km']:g} km",
+            "feature_count": len(existing["features"]),
+            "geojson": {"type": "FeatureCollection", "features": existing["features"]},
+        })
+
+    workflow = {
+        "type": "suitability",
         "outcome": run.outcome,
         "stop_reason": run.stop_reason,
         "plan": [state.public() for state in run.steps],

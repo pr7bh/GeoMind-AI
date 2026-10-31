@@ -3,16 +3,17 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import get_settings
 from app.routers import routing
 from app.schemas.analysis import MAX_FEATURES
-from app.services import coverage, spatial_analysis
+from app.services import coverage, spatial_analysis, suitability
 from app.services.agent.runner import (
     Emit,
     describe_discovery,
@@ -31,6 +32,29 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/agent", tags=["GIS Agent"])
 
 
+class SuitabilityOptions(BaseModel):
+    """Site suitability settings from the configuration panel."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    facility: Literal["hospital", "school", "pharmacy", "police", "fire_station"] | None = None
+    radius_km: float | None = Field(default=None, gt=0, le=coverage.MAX_STUDY_RADIUS_KM)
+    # Raw non-negative weights by criterion id; rescaled to sum to 1.
+    weights: dict[str, float] | None = Field(default=None, max_length=10)
+    pharmacy_direction: Literal["closer", "farther"] | None = None
+    existing_saturation_m: float = Field(
+        default=suitability.DEFAULT_EXISTING_SATURATION_M,
+        ge=suitability.MIN_EXISTING_SATURATION_M,
+        le=suitability.DEFAULT_EXISTING_SATURATION_M,
+    )
+    normalization: Literal["saturating", "minmax"] = "saturating"
+    max_candidates: int = Field(
+        default=suitability.MAX_CANDIDATES,
+        ge=suitability.MIN_CANDIDATES,
+        le=suitability.MAX_CANDIDATES,
+    )
+
+
 class AgentRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
     start: list[float] | None = Field(default=None, min_length=2, max_length=2)
@@ -42,6 +66,8 @@ class AgentRequest(BaseModel):
     compare_coordinates: list[float] | None = Field(default=None, min_length=2, max_length=2)
     features: list[dict] | None = Field(default=None, max_length=MAX_FEATURES)
     limit: int = Field(default=5, ge=1, le=100)
+    # Present when the suitability panel runs the analysis.
+    suitability: SuitabilityOptions | None = None
 
 
 class AgentResponse(BaseModel):
@@ -147,6 +173,49 @@ def _workflow_response(run, workflow: dict, layers: list[dict], intent: str = "w
         ],
         layers=layers,
         workflow=workflow,
+    )
+
+
+def _suitability_plan_inputs(
+    request: AgentRequest,
+) -> tuple[workflows.SuitabilityRequest, workflows.SuitabilitySettings | None] | None:
+    """Matched suitability request and validated settings.
+
+    Settings are None when no supported facility was named. Invalid weights
+    raise a 422 before any search runs.
+    """
+    options = request.suitability
+    matched = workflows.match_suitability(request.message)
+    if matched is None and options is None:
+        return None
+
+    matched = matched or workflows.SuitabilityRequest(
+        facility=None,
+        radius_km=coverage.DEFAULT_STUDY_RADIUS_KM,
+        unsupported=tuple(workflows.unsupported_criteria(request.message)),
+    )
+    facility = (options.facility if options else None) or matched.facility
+    radius_km = options.radius_km if options and options.radius_km else matched.radius_km
+    resolved = workflows.SuitabilityRequest(facility, radius_km, matched.low_density, matched.unsupported)
+    if facility is None:
+        return resolved, None
+
+    weights = options.weights if options and options.weights is not None else None
+    if weights is None and matched.low_density:
+        weights = {suitability.DENSITY: 1.0}
+    direction = options.pharmacy_direction if options else None
+
+    try:
+        normalised = suitability.validate_weights(facility, weights, direction)
+    except suitability.SuitabilityError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return resolved, workflows.SuitabilitySettings(
+        weights=normalised,
+        pharmacy_direction=direction,
+        existing_saturation_m=options.existing_saturation_m if options else suitability.DEFAULT_EXISTING_SATURATION_M,
+        normalization=options.normalization if options else "saturating",
+        max_candidates=options.max_candidates if options else suitability.MAX_CANDIDATES,
     )
 
 
@@ -279,7 +348,66 @@ async def handle_chat(request: AgentRequest, emit: Emit = _noop) -> AgentRespons
             },
         )
 
-    # 2. Hospital/pharmacy-style ranking workflow (deterministic, no LLM).
+    # 2. Site suitability (deterministic MCDA, no LLM). Before the ranking
+    #    workflow and coverage, whose wording ("underserved") it can share.
+    suitability_inputs = _suitability_plan_inputs(request)
+
+    if suitability_inputs is not None:
+        suitability_request, settings = suitability_inputs
+
+        if settings is None:
+            return AgentResponse(
+                success=True,
+                intent="suitability",
+                mode="workflow",
+                message=(
+                    "Which facility should I find sites for? Supported: hospital, school, "
+                    "pharmacy, police station or fire station."
+                ),
+                needs_input=["facility"],
+            )
+
+        if location is None:
+            return AgentResponse(
+                success=True,
+                intent="suitability",
+                mode="workflow",
+                message="Select a location on the map first, then ask again.",
+                needs_input=["coordinates"],
+            )
+
+        if suitability_request.radius_km > coverage.MAX_STUDY_RADIUS_KM:
+            return AgentResponse(
+                success=False,
+                intent="suitability",
+                mode="workflow",
+                message=(
+                    f"Site suitability is limited to a {coverage.MAX_STUDY_RADIUS_KM:g} km radius; "
+                    f"you asked for {suitability_request.radius_km:g} km. Try a smaller radius."
+                ),
+                error_code="invalid_plan",
+            )
+
+        try:
+            run = await workflows.run_suitability_workflow(
+                suitability_request,
+                settings,
+                location,
+                get_settings().agent_timeout_seconds,
+                emit,
+            )
+        except PlanError as exc:
+            return AgentResponse(
+                success=False,
+                intent="suitability",
+                mode="workflow",
+                message=f"That analysis cannot be run: {exc}",
+                error_code="invalid_plan",
+            )
+
+        return _workflow_response(run, *workflows.serialize_suitability(run), intent="suitability")
+
+    # 2b. Hospital/pharmacy-style ranking workflow (deterministic, no LLM).
     #    Checked before the simple path, which matches the same opening words.
     workflow_request = workflows.match_workflow(request.message)
 
@@ -543,6 +671,8 @@ async def chat_with_agent_stream(request: AgentRequest, http_request: Request):
     # Reject bad input with a real 422 before the 200 stream starts.
     _valid_location(request.coordinates)
     _valid_location(request.compare_coordinates)
+    if request.suitability is not None:
+        _suitability_plan_inputs(request)
 
     async def events() -> AsyncIterator[str]:
         queue: asyncio.Queue[dict | None] = asyncio.Queue()
@@ -586,6 +716,12 @@ async def chat_with_agent_stream(request: AgentRequest, http_request: Request):
         # Ask proxies not to buffer, so events reach the browser as they happen.
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/suitability/config")
+def suitability_config():
+    """Facilities, criteria, default weights and limits for site suitability."""
+    return suitability.config()
 
 
 @router.get("/status")

@@ -161,6 +161,8 @@ def validate_plan(
     for step in steps:
         for arg_name, producers in tools[step.tool].step_refs:
             ref = getattr(states[step.id].args, arg_name)
+            if ref is None:
+                continue  # optional reference left unset
             if ref not in step.all_dependencies:
                 raise PlanError(f"Step '{step.id}' uses '{ref}' without depending on it.")
             if by_id[ref].tool not in producers:

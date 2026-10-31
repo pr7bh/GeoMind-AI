@@ -67,8 +67,12 @@ def _estimated_cells(radius_m: float, cell_size_m: float) -> int:
     return math.ceil(math.pi * radius_m**2 / cell_size_m**2)
 
 
-def choose_cell_size(radius_m: float, requested_m: float | None) -> tuple[int, bool]:
-    """Smallest allowed cell size (>= the request) that keeps cells <= MAX_CELLS.
+def choose_cell_size(
+    radius_m: float,
+    requested_m: float | None,
+    max_cells: int = MAX_CELLS,
+) -> tuple[int, bool]:
+    """Smallest allowed cell size (>= the request) that keeps cells <= max_cells.
 
     Returns (cell_size_m, adjusted).
     """
@@ -79,10 +83,10 @@ def choose_cell_size(radius_m: float, requested_m: float | None) -> tuple[int, b
 
     size = requested_m or MIN_CELL_SIZE_M
     # Start from the analytic bound, then confirm against the real grid.
-    size = max(size, radius_m * math.sqrt(math.pi / MAX_CELLS))
+    size = max(size, radius_m * math.sqrt(math.pi / max_cells))
     size = math.ceil(size / CELL_SIZE_STEP_M) * CELL_SIZE_STEP_M
 
-    while len(build_grid(radius_m, size)) > MAX_CELLS:
+    while len(build_grid(radius_m, size)) > max_cells:
         size += CELL_SIZE_STEP_M
         if size > MAX_CELL_SIZE_M:
             raise CoverageError("This study area cannot be covered within the cell limit.")

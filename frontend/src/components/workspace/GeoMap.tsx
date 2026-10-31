@@ -217,6 +217,12 @@ function classifiedStyle(color: string, outline?: string) {
   return new Style({
     fill: new Fill({ color: `${color}59` }),
     stroke: new Stroke({ color: outline ?? `${color}cc`, width: outline ? 1.25 : 0.75 }),
+    // Point features (e.g. suitability candidates) need an image to render.
+    image: new Circle({
+      radius: 5,
+      fill: new Fill({ color }),
+      stroke: new Stroke({ color: "#ffffff", width: 1.25 }),
+    }),
   });
 }
 
